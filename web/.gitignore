@@ -15,3 +15,5 @@ next-env.d.ts
 # Local logs
 *.log
 dev-startup.log
+
+.vercel

@@ -61,7 +61,7 @@ export function PriceChart({ curve }: { curve: Address }) {
         out.sort((a, b) => a.ts - b.ts);
         setTrades(out);
       } catch {
-        /* ignore */
+        // ignore
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -132,7 +132,7 @@ export function PriceChart({ curve }: { curve: Address }) {
       </div>
 
       <div className="px-3 pt-2 pb-1 text-[11px] font-mono flex items-center gap-3" style={{ color: COLORS.text }}>
-        <span className="text-zinc-200 font-semibold">LITPUMP · {tf}</span>
+        <span className="text-zinc-200 font-semibold">LITPUMP - {tf}</span>
         {last ? (
           <div className="flex items-center gap-3">
             <span>O <span className="text-zinc-100">{formatPrice(last.open)}</span></span>
@@ -141,20 +141,18 @@ export function PriceChart({ curve }: { curve: Address }) {
             <span>C <span className="text-zinc-100">{formatPrice(last.close)}</span></span>
             <span style={{ color: change >= 0 ? COLORS.up : COLORS.down }}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span>
           </div>
-        ) : loading ? <span>Loading…</span> : (
+        ) : loading ? <span>Loading...</span> : (
           <span>
             No trades yet
-            {currentPrice ? <span className="ml-2 text-zinc-300">· current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
+            {currentPrice ? <span className="ml-2 text-zinc-300">- current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
           </span>
         )}
       </div>
 
       <div className="w-full" style={{ height: 360, background: COLORS.bg, position: "relative" }}>
-        {/* Sparse-data overlay: when fewer than 3 trades exist the chart looks empty.
-             Render a subtle banner so users understand it's not broken. */}
         {!loading && trades.length > 0 && trades.length < 3 && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded-full bg-bg-soft/80 border border-bg-border text-[11px] text-zinc-400 backdrop-blur-sm pointer-events-none">
-            Just launched · {trades.length === 1 ? "1 trade so far" : `${trades.length} trades so far`}
+            Just launched - {trades.length === 1 ? "1 trade so far" : `${trades.length} trades so far`}
           </div>
         )}
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full block" preserveAspectRatio="none">
@@ -247,7 +245,6 @@ function buildCandles(trades: TradePoint[], bucket: number): Candle[] {
   return Array.from(map.values())
     .sort((a, b) => a.time - b.time)
     .map((c) => {
-      // Give zero-range candles a tiny visible body so they render as a dash.
       if (c.high === c.low) {
         const move = Math.max(c.high * 0.001, 1e-12);
         return { ...c, high: c.high + move, low: Math.max(0, c.low - move) };
