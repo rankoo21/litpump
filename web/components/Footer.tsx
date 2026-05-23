@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ShieldCheck, BookOpen, Github, Twitter } from "lucide-react";
+import { BookOpen, Github, Twitter } from "lucide-react";
 import { Logo } from "./Logo";
 
 export function Footer() {
@@ -52,11 +52,7 @@ export function Footer() {
           <div>
             <div className="section-heading">Trust</div>
             <ul className="mt-3 space-y-2 text-sm">
-              <FooterLink href="/security">
-                <ShieldCheck size={12} /> Security policy
-              </FooterLink>
-              <FooterLink href="/security#audit">Self-audit report</FooterLink>
-              <FooterLink href="https://github.com" external>
+              <FooterLink href="https://github.com/rankoo21/litpump" external>
                 <Github size={12} /> Source code
               </FooterLink>
               <FooterLink href="https://x.com" external>

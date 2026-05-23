@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { Rocket, Receipt, ShieldCheck, Briefcase, Menu, X } from "lucide-react";
+import { Rocket, Receipt, Briefcase, Menu, X } from "lucide-react";
 import { TransactionsDrawer } from "./TransactionsDrawer";
 import { Logo } from "./Logo";
 import { NotificationToggle } from "./GraduationWatcher";
@@ -59,15 +59,6 @@ export function Header() {
 
         {/* Right side */}
         <div className="flex items-center gap-2">
-          {/* Audit badge */}
-          <a
-            href="/security"
-            className="hidden xl:inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/5 text-emerald-300 hover:bg-emerald-500/10 transition"
-            title="Read the security policy and self-audit report"
-          >
-            <ShieldCheck size={12} /> Audited
-          </a>
-
           {mounted && (
             <button
               type="button"
@@ -139,12 +130,6 @@ export function Header() {
             >
               <Receipt size={14} /> Activity
             </button>
-            <a
-              href="/security"
-              className="px-3 py-2 rounded-md text-sm font-medium text-emerald-300 hover:bg-emerald-500/10 transition inline-flex items-center gap-2"
-            >
-              <ShieldCheck size={14} /> Audited
-            </a>
           </div>
         </nav>
       )}
