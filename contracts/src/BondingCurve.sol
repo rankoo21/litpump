@@ -7,62 +7,42 @@ import {IERC20}           from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PumpToken}        from "./PumpToken.sol";
 import {IUniswapV2Router02, IUniswapV2Factory} from "./IUniswapV2Router02.sol";
 
-/// @notice Slim view-only interface the curve uses to read DEX configuration off the
-///         factory. Decouples the curve from the factory's full surface.
 interface IFactoryConfig {
     function dexRouter()   external view returns (address);
     function lpRecipient() external view returns (address);
 }
 
-/// @title  BondingCurve
-/// @notice Constant-product (x*y=k) bonding curve with virtual reserves, pump.fun-style.
-/// @dev    One curve clone per token, deployed by TokenFactory via EIP-1167 + initialize().
-///         Native asset is zkLTC on LitVM. CEI is enforced and `nonReentrant` guards every
-///         public state-mutating entry point (defence-in-depth). On graduation, the curve
-///         seeds liquidity on a Uniswap V2-style DEX (QuickSwap / LitvmSwap V2 surface)
-///         and locks the resulting LP tokens to a configurable recipient.
 contract BondingCurve is Initializable, ReentrancyGuard {
-    // ---------------------------------------------------------------------
-    // Curve constants. Tuned so graduation triggers ~85 zkLTC.
-    // ---------------------------------------------------------------------
-    uint256 public constant TOTAL_SUPPLY        = 1_000_000_000 ether;        // 1B tokens
-    uint256 public constant SALE_SUPPLY         = 800_000_000 ether;          // 800M sold on curve
-    uint256 public constant LP_SUPPLY           = 200_000_000 ether;          // 200M reserved for LP
-    uint256 public constant VIRTUAL_LTC         = 30 ether;                   // virtual zkLTC reserves
-    uint256 public constant VIRTUAL_TOKENS      = 1_073_000_000 ether;        // virtual token reserves
+    uint256 public constant TOTAL_SUPPLY        = 1_000_000_000 ether;
+    uint256 public constant SALE_SUPPLY         = 800_000_000 ether;
+    uint256 public constant LP_SUPPLY           = 200_000_000 ether;
+    uint256 public constant VIRTUAL_LTC         = 30 ether;
+    uint256 public constant VIRTUAL_TOKENS      = 1_073_000_000 ether;
     uint256 public constant K                   = VIRTUAL_LTC * VIRTUAL_TOKENS;
     uint256 public constant GRADUATION_LTC      = 85 ether;
 
-    uint256 public constant FEE_BPS             = 100;     // 1% total trading fee
-    uint256 public constant CREATOR_FEE_BPS     = 50;      // 0.5% to creator
+    uint256 public constant FEE_BPS             = 100;
+    uint256 public constant CREATOR_FEE_BPS     = 50;
     uint256 public constant BPS_DENOM           = 10_000;
     uint256 public constant MAX_DEADLINE_SKEW   = 30 days;
 
-    // Anti-snipe window after launch.
     uint256 public constant ANTI_SNIPE_BLOCKS         = 3;
     uint256 public constant ANTI_SNIPE_PER_ADDR_LIMIT = 0.5 ether;
 
-    // ---------------------------------------------------------------------
-    // Storage
-    // ---------------------------------------------------------------------
     PumpToken public token;
     address   public factory;
     address   public feeRecipient;
-    address   public creator;            // receives the creator share of trade fees
-    uint256   public launchBlock;        // block number at initialise() — anti-snipe baseline
+    address   public creator;
+    uint256   public launchBlock;
 
-    uint256 public ltcCollected;         // real zkLTC reserves currently locked in curve
-    uint256 public tokensSold;           // real tokens minted via curve
-    bool    public graduated;            // curve has reached graduation threshold
-    bool    public migrated;             // liquidity has been seeded on the DEX
-    address public lpPair;               // address of the AMM pair, populated on migrate()
+    uint256 public ltcCollected;
+    uint256 public tokensSold;
+    bool    public graduated;
+    bool    public migrated;
+    address public lpPair;
 
-    /// @notice Tracks per-address zkLTC spent during the anti-snipe window.
     mapping(address => uint256) public antiSnipeSpent;
 
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
     event Bought(
         address indexed buyer,
         uint256 ltcIn,
@@ -93,9 +73,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         uint256 lpMinted
     );
 
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
     error AlreadyGraduated();
     error ZeroAmount();
     error SlippageExceeded();
@@ -136,10 +113,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         creator      = _creator;
         launchBlock  = block.number;
     }
-
-    // =====================================================================
-    //                           READ HELPERS
-    // =====================================================================
 
     function currentPriceX1e18() public view returns (uint256) {
         uint256 x = VIRTUAL_LTC + ltcCollected;
@@ -202,10 +175,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         return (currentPriceX1e18() * TOTAL_SUPPLY) / 1e18;
     }
 
-    // =====================================================================
-    //                              TRADING
-    // =====================================================================
-
     function buy(uint256 minTokensOut, uint256 deadline)
         external
         payable
@@ -222,8 +191,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         if (tokensOut == 0) revert ZeroAmount();
         if (tokensOut < minTokensOut) revert SlippageExceeded();
 
-        // Anti-snipe: cap per-address spend during the first few blocks. The factory
-        // is exempt so the optional dev buy in the same tx as launch still works.
         if (block.number < launchBlock + ANTI_SNIPE_BLOCKS && msg.sender != factory) {
             uint256 newSpend = antiSnipeSpent[msg.sender] + ltcConsumed;
             if (newSpend > ANTI_SNIPE_PER_ADDR_LIMIT) revert AntiSnipeLimit();
@@ -235,13 +202,11 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         uint256 creatorFee  = (fee * CREATOR_FEE_BPS) / FEE_BPS;
         uint256 protocolFee = fee - creatorFee;
 
-        // ---- Effects ----
         ltcCollected += ltcNet;
         tokensSold   += tokensOut;
         bool justGraduated = ltcCollected >= GRADUATION_LTC && !graduated;
         if (justGraduated) graduated = true;
 
-        // ---- Interactions ----
         token.mint(msg.sender, tokensOut);
         if (protocolFee > 0) _safeSendNative(feeRecipient, protocolFee);
         if (creatorFee > 0)  _safeSendNative(creator, creatorFee);
@@ -260,13 +225,9 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         );
         if (justGraduated) {
             emit Graduated(ltcCollected, tokensSold);
-            // Best-effort auto-migration: if the factory already has a router,
-            // seed liquidity in the same transaction. If anything reverts (e.g.
-            // router not yet configured), we swallow the failure and leave
-            // `migrate()` available for a manual retry — funds are unaffected.
             address router = IFactoryConfig(factory).dexRouter();
             if (router != address(0)) {
-                try this._migrateExternal() {} catch { /* retry later via migrate() */ }
+                try this._migrateExternal() {} catch {}
             }
         }
     }
@@ -312,22 +273,12 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         );
     }
 
-    // =====================================================================
-    //                         DEX MIGRATION
-    // =====================================================================
-
-    /// @notice Anyone may call this once the curve has graduated to seed liquidity on
-    ///         the DEX. Reverts cleanly with `NoRouter` if the factory has not yet
-    ///         configured one — funds remain held by the curve, retryable later.
     function migrate() external nonReentrant {
         if (!graduated) revert NotGraduated();
         if (migrated)   revert AlreadyMigrated();
         _migrate();
     }
 
-    /// @dev External-but-self-only entry point so we can wrap the migration in a
-    ///      `try/catch` from `buy()` without losing reentrancy protection. Calling
-    ///      contracts cannot use this — only this contract itself can.
     function _migrateExternal() external {
         require(msg.sender == address(this), "self-only");
         if (!graduated) revert NotGraduated();
@@ -340,17 +291,15 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         if (router == address(0)) revert NoRouter();
 
         address lpTo = IFactoryConfig(factory).lpRecipient();
-        if (lpTo == address(0)) lpTo = address(0xdEaD); // safe fallback: burn LP
+        if (lpTo == address(0)) lpTo = address(0xdEaD);
 
         uint256 ltcAmount   = ltcCollected;
         uint256 tokenAmount = LP_SUPPLY;
         if (ltcAmount == 0) revert TransferFailed();
 
-        // ---- Effects ----
         ltcCollected = 0;
         migrated     = true;
 
-        // ---- Interactions ----
         token.mint(address(this), tokenAmount);
         IERC20(address(token)).approve(router, tokenAmount);
 
@@ -364,7 +313,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
                 block.timestamp + 30 minutes
             );
 
-        // Look up the resulting pair address for clients (token <> WETH).
         address weth = IUniswapV2Router02(router).WETH();
         lpPair = IUniswapV2Factory(IUniswapV2Router02(router).factory()).getPair(
             address(token),
@@ -373,20 +321,14 @@ contract BondingCurve is Initializable, ReentrancyGuard {
 
         IERC20(address(token)).approve(router, 0);
 
-        // Burn any unused LP tokens so total supply stays consistent.
         uint256 leftoverTokens = token.balanceOf(address(this));
         if (leftoverTokens > 0) token.burn(address(this), leftoverTokens);
 
-        // Forward any unused ETH as protocol fee since reserves are no longer needed.
         uint256 leftoverETH = address(this).balance;
         if (leftoverETH > 0) _safeSendNative(feeRecipient, leftoverETH);
 
         emit Migrated(router, lpPair, amountETH, amountToken, liquidity);
     }
-
-    // =====================================================================
-    //                              INTERNAL
-    // =====================================================================
 
     function _checkDeadline(uint256 deadline) internal view {
         if (deadline == 0) return;
@@ -399,7 +341,6 @@ contract BondingCurve is Initializable, ReentrancyGuard {
         if (!ok) revert TransferFailed();
     }
 
-    /// @notice Reject all unsolicited native transfers — only `buy()` may credit reserves.
     receive() external payable {
         revert TransferFailed();
     }

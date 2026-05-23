@@ -14,11 +14,6 @@ interface IWLTC {
     function balanceOf(address) external view returns (uint256);
 }
 
-/// @title  LitPumpRouter — minimal Uniswap V2-style router
-/// @notice Implements `addLiquidityETH` (used by `BondingCurve.migrate()`) plus
-///         `swapExactETHForTokens` and `swapExactTokensForETH` so the dApp can
-///         offer swap UX on graduated tokens. No multi-hop routing — every swap
-///         is a single hop through `WLTC`.
 contract LitPumpRouter is ReentrancyGuard {
     address public immutable factoryAddr;
     address public immutable wltc;
@@ -41,13 +36,6 @@ contract LitPumpRouter is ReentrancyGuard {
     function factory() external view returns (address) { return factoryAddr; }
     function WETH()    external view returns (address) { return wltc;        }
 
-    // -----------------------------------------------------------------
-    // Liquidity
-    // -----------------------------------------------------------------
-
-    /// @notice Add token + native ETH liquidity. Called by `BondingCurve.migrate()`.
-    ///         Pulls `amountTokenDesired` from msg.sender, wraps msg.value into WLTC,
-    ///         and credits LP tokens to `to`.
     function addLiquidityETH(
         address token,
         uint256 amountTokenDesired,
@@ -62,7 +50,6 @@ contract LitPumpRouter is ReentrancyGuard {
         ensure(deadline)
         returns (uint256 amountToken, uint256 amountETH, uint256 liquidity)
     {
-        // Bootstrap: create the pair if it doesn't already exist.
         address pair = LitPumpFactory(factoryAddr).getPair(token, wltc);
         if (pair == address(0)) {
             pair = LitPumpFactory(factoryAddr).createPair(token, wltc);
@@ -70,12 +57,9 @@ contract LitPumpRouter is ReentrancyGuard {
 
         (uint256 reserveToken, uint256 reserveETH) = _getReserves(pair, token, wltc);
         if (reserveToken == 0 && reserveETH == 0) {
-            // First deposit — caller's amounts set the initial price.
             amountToken = amountTokenDesired;
             amountETH   = msg.value;
         } else {
-            // Subsequent deposit — quote against current reserves and pick the
-            // optimal pair (whichever side hits its min first).
             uint256 ethOptimal = (amountTokenDesired * reserveETH) / reserveToken;
             if (ethOptimal <= msg.value) {
                 if (ethOptimal < amountETHMin) revert InsufficientAmount();
@@ -89,26 +73,18 @@ contract LitPumpRouter is ReentrancyGuard {
             }
         }
 
-        // Move tokens to the pair.
         require(IERC20(token).transferFrom(msg.sender, pair, amountToken), "tokenTransferFrom");
-        // Wrap exactly amountETH and forward to the pair.
         IWLTC(wltc).deposit{value: amountETH}();
         require(IWLTC(wltc).transfer(pair, amountETH), "wltcTransfer");
 
         liquidity = LitPumpPair(pair).mint(to);
 
-        // Refund unused native ETH.
         if (msg.value > amountETH) {
             (bool ok, ) = msg.sender.call{value: msg.value - amountETH}("");
             if (!ok) revert TransferFailed();
         }
     }
 
-    // -----------------------------------------------------------------
-    // Swaps
-    // -----------------------------------------------------------------
-
-    /// @notice Swap native zkLTC for tokens through the WLTC pair.
     function swapExactETHForTokens(
         uint256 amountOutMin,
         address[] calldata path,
@@ -120,7 +96,6 @@ contract LitPumpRouter is ReentrancyGuard {
         address pair  = LitPumpFactory(factoryAddr).getPair(token, wltc);
         if (pair == address(0)) revert InsufficientLiquidity();
 
-        // Wrap msg.value and send WLTC to the pair.
         IWLTC(wltc).deposit{value: msg.value}();
         require(IWLTC(wltc).transfer(pair, msg.value), "wltcTransfer");
 
@@ -136,8 +111,6 @@ contract LitPumpRouter is ReentrancyGuard {
         }
     }
 
-    /// @notice Swap tokens for native zkLTC. The user must approve `amountIn`
-    ///         tokens to the router beforehand.
     function swapExactTokensForETH(
         uint256 amountIn,
         uint256 amountOutMin,
@@ -163,19 +136,11 @@ contract LitPumpRouter is ReentrancyGuard {
             LitPumpPair(pair).swap(amountOut, 0, address(this));
         }
 
-        // Unwrap and forward to user.
         IWLTC(wltc).withdraw(amountOut);
         (bool ok, ) = to.call{value: amountOut}("");
         if (!ok) revert TransferFailed();
     }
 
-    // -----------------------------------------------------------------
-    // Quote helpers (UI-callable, view)
-    // -----------------------------------------------------------------
-
-    /// @notice Pure quote — given an input amount and reserves, returns the
-    ///         output amount after the 0.30% fee. UI uses this to pre-compute
-    ///         price impact and minOut without a state mutation.
     function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut)
         external pure returns (uint256)
     {
@@ -185,7 +150,6 @@ contract LitPumpRouter is ReentrancyGuard {
     function _getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut) internal pure returns (uint256) {
         if (amountIn == 0)                        revert InsufficientAmount();
         if (reserveIn == 0 || reserveOut == 0)    revert InsufficientLiquidity();
-        // 0.30% fee — must mirror LitPumpPair.{FEE_BPS,BPS_DENOM} exactly.
         uint256 amountInWithFee = amountIn * (10_000 - 30);
         uint256 numerator   = amountInWithFee * reserveOut;
         uint256 denominator = reserveIn * 10_000 + amountInWithFee;
@@ -200,7 +164,6 @@ contract LitPumpRouter is ReentrancyGuard {
     }
 
     receive() external payable {
-        // Only allow inbound ETH from the WLTC contract during `withdraw()`.
         require(msg.sender == wltc, "only wltc");
     }
 }

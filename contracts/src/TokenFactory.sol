@@ -10,28 +10,13 @@ import {ReentrancyGuard}   from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 import {PumpToken}         from "./PumpToken.sol";
 import {BondingCurve}      from "./BondingCurve.sol";
 
-/// @title  TokenFactory
-/// @notice Permissionless launchpad: anyone can launch a token + its bonding curve in one tx.
-/// @dev    Uses EIP-1167 minimal-proxy clones with deterministic CREATE2 salts so the curve
-///         address is known to the token, and vice versa, before either is deployed.
-///
-///         Owner may configure a Uniswap V2-style DEX router (`dexRouter`) and an LP token
-///         recipient (`lpRecipient`). Once configured, graduating curves seed liquidity on
-///         the DEX in the same transaction as the graduating buy, locking the resulting LP
-///         tokens to `lpRecipient` (defaults to `0x...dEaD`).
 contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
     using Clones for address;
 
-    // ---------------------------------------------------------------------
-    // Constants
-    // ---------------------------------------------------------------------
     uint256 public constant LAUNCH_COOLDOWN   = 30 seconds;
     uint256 public constant MAX_CREATION_FEE  = 1 ether;
     uint256 internal constant MAX_PAGE        = 200;
 
-    // ---------------------------------------------------------------------
-    // Types
-    // ---------------------------------------------------------------------
     struct TokenInfo {
         address token;
         address curve;
@@ -56,36 +41,19 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
         string website;
     }
 
-    // ---------------------------------------------------------------------
-    // Immutables / config
-    // ---------------------------------------------------------------------
     address public immutable tokenImplementation;
     address public immutable curveImplementation;
     address public feeRecipient;
     uint256 public creationFee;
 
-    /// @notice DEX router used by graduating curves to seed liquidity. Settable by
-    ///         the owner so we can plug in a router (QuickSwap / LitvmSwap V2) once
-    ///         it is live on LitVM. While unset, graduating curves sit in a
-    ///         "graduated, not yet migrated" state and `curve.migrate()` may be
-    ///         called manually after a router is configured.
     address public dexRouter;
-
-    /// @notice Recipient of LP tokens minted on migration. Defaults to `0xdEaD`
-    ///         so liquidity is locked forever.
     address public lpRecipient;
 
-    // ---------------------------------------------------------------------
-    // State
-    // ---------------------------------------------------------------------
     TokenInfo[] public tokens;
-    mapping(address => uint256) public tokenIndexPlusOne;       // 0 = unknown, else index+1
-    mapping(address => uint256) public lastLaunchAt;            // anti-bot per-creator cooldown
-    uint256 public nextSalt;                                    // monotonic salt for CREATE2
+    mapping(address => uint256) public tokenIndexPlusOne;
+    mapping(address => uint256) public lastLaunchAt;
+    uint256 public nextSalt;
 
-    // ---------------------------------------------------------------------
-    // Events
-    // ---------------------------------------------------------------------
     event TokenLaunched(
         address indexed token,
         address indexed curve,
@@ -100,9 +68,6 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
     event DexRouterUpdated(address indexed previousRouter, address indexed newRouter);
     event LpRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
 
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
     error InsufficientFee();
     error TransferFailed();
     error CooldownActive();
@@ -120,13 +85,9 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
 
         feeRecipient = _feeRecipient;
         creationFee  = _creationFee;
-        // Default LP recipient: burned. Owner can switch to a vesting vault later.
         lpRecipient  = address(0xdEaD);
     }
 
-    // ---------------------------------------------------------------------
-    // ADMIN
-    // ---------------------------------------------------------------------
     function setCreationFee(uint256 newFee) external onlyOwner {
         if (newFee > MAX_CREATION_FEE) revert FeeTooHigh();
         emit CreationFeeUpdated(creationFee, newFee);
@@ -139,7 +100,6 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
         feeRecipient = newRecipient;
     }
 
-    /// @notice Configure the DEX router. Pass `address(0)` to disable auto-migration.
     function setDexRouter(address newRouter) external onlyOwner {
         emit DexRouterUpdated(dexRouter, newRouter);
         dexRouter = newRouter;
@@ -154,9 +114,6 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
     function pause()   external onlyOwner { _pause();   }
     function unpause() external onlyOwner { _unpause(); }
 
-    // ---------------------------------------------------------------------
-    // LAUNCH
-    // ---------------------------------------------------------------------
     function launch(CreateParams calldata p, uint256 initialBuyMinTokens, uint256 deadline)
         external
         payable
@@ -232,9 +189,6 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // VIEWS
-    // ---------------------------------------------------------------------
     function tokensCount() external view returns (uint256) {
         return tokens.length;
     }
@@ -255,9 +209,6 @@ contract TokenFactory is Ownable2Step, Pausable, ReentrancyGuard {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // INTERNAL
-    // ---------------------------------------------------------------------
     function _safeSendNative(address to, uint256 amount) internal {
         (bool ok, ) = to.call{value: amount}("");
         if (!ok) revert TransferFailed();

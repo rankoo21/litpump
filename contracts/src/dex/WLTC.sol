@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-/// @title  WLTC — Wrapped zkLTC
-/// @notice 1:1 wrapper around the native zkLTC token, identical surface to canonical
-///         WETH9. Required by Uniswap-V2-style routers because pairs hold ERC-20s
-///         on both sides; native ETH is wrapped/unwrapped at the router edge.
 contract WLTC {
     string  public constant name     = "Wrapped Litecoin";
     string  public constant symbol   = "WLTC";

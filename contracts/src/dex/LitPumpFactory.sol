@@ -3,10 +3,6 @@ pragma solidity 0.8.24;
 
 import {LitPumpPair} from "./LitPumpPair.sol";
 
-/// @title  LitPumpFactory — Uniswap V2-compatible pair factory
-/// @notice Creates one pair per (tokenA, tokenB) tuple, with the canonical
-///         CREATE2-derived deterministic address scheme so off-chain code can
-///         compute pair addresses without an RPC call.
 contract LitPumpFactory {
     mapping(address => mapping(address => address)) private _getPair;
     address[] public allPairs;
@@ -31,7 +27,6 @@ contract LitPumpFactory {
         if (token0 == address(0)) revert ZeroAddress();
         if (_getPair[token0][token1] != address(0)) revert PairExists();
 
-        // CREATE2 salt is the sorted token tuple — addresses are deterministic.
         bytes32 salt = keccak256(abi.encodePacked(token0, token1));
         pair = address(new LitPumpPair{salt: salt}(token0, token1));
 

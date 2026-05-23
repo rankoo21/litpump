@@ -5,16 +5,9 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/// @title  LitPumpPair — minimal Uniswap V2-style constant-product AMM pair
-/// @notice Holds two ERC-20 tokens and lets liquidity providers mint LP tokens
-///         against deposits and burn them back for the underlying. Swaps follow
-///         the canonical x*y=k formula with a 0.30% fee.
-/// @dev    No flash swaps and no oracle accumulators — the goal is a small,
-///         auditable surface for the LitPump testnet, not feature parity with
-///         production Uniswap V2.
 contract LitPumpPair is ERC20, ReentrancyGuard {
-    uint256 public constant MIN_LIQUIDITY = 1_000;       // burned at first mint, prevents division by zero
-    uint256 public constant FEE_BPS       = 30;          // 0.30%
+    uint256 public constant MIN_LIQUIDITY = 1_000;
+    uint256 public constant FEE_BPS       = 30;
     uint256 public constant BPS_DENOM     = 10_000;
 
     address public immutable factory;
@@ -45,7 +38,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
     error KViolation();
     error Overflow();
 
-    /// @dev `_token0` must be < `_token1` lexicographically (factory enforces).
     constructor(address _token0, address _token1) ERC20("LitPump LP", "LP-LITPUMP") {
         factory = msg.sender;
         token0  = _token0;
@@ -56,10 +48,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
         return (_reserve0, _reserve1);
     }
 
-    /// @notice Add liquidity. Caller must transfer the desired amounts to the pair
-    ///         BEFORE calling `mint` — the pair compares its current balance to its
-    ///         last-known reserves and credits the difference to the LP minter.
-    ///         The router is responsible for transferring tokens in.
     function mint(address to) external nonReentrant returns (uint256 liquidity) {
         (uint112 r0, uint112 r1) = (_reserve0, _reserve1);
         uint256 bal0 = IERC20(token0).balanceOf(address(this));
@@ -72,7 +60,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
             liquidity = _sqrt(amount0 * amount1);
             if (liquidity <= MIN_LIQUIDITY) revert InsufficientLiquidityMinted();
             unchecked { liquidity -= MIN_LIQUIDITY; }
-            // Permanently lock the first MIN_LIQUIDITY units so the supply can never go to zero.
             _mint(address(0xdEaD), MIN_LIQUIDITY);
         } else {
             uint256 a = (amount0 * _totalSupply) / r0;
@@ -86,8 +73,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
         emit Mint(msg.sender, amount0, amount1, liquidity);
     }
 
-    /// @notice Remove liquidity. Caller must transfer LP tokens to this pair BEFORE
-    ///         calling `burn`. The pair sends pro-rata token0/token1 to `to`.
     function burn(address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
         uint256 bal0 = IERC20(token0).balanceOf(address(this));
         uint256 bal1 = IERC20(token1).balanceOf(address(this));
@@ -108,9 +93,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
         emit Burn(msg.sender, amount0, amount1, to);
     }
 
-    /// @notice Swap. The router is responsible for transferring `amount{0,1}In`
-    ///         tokens in BEFORE calling `swap`. The pair sends `amount{0,1}Out`
-    ///         to `to` and verifies the K invariant holds (with fee).
     function swap(uint256 amount0Out, uint256 amount1Out, address to) external nonReentrant {
         if (amount0Out == 0 && amount1Out == 0) revert InsufficientOutputAmount();
         (uint112 r0, uint112 r1) = (_reserve0, _reserve1);
@@ -126,7 +108,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
         uint256 amount1In = bal1 > r1 - amount1Out ? bal1 - (r1 - amount1Out) : 0;
         if (amount0In == 0 && amount1In == 0) revert InsufficientInputAmount();
 
-        // Adjusted balances must satisfy K-invariant (fee scaled by BPS_DENOM).
         uint256 adj0 = bal0 * BPS_DENOM - amount0In * FEE_BPS;
         uint256 adj1 = bal1 * BPS_DENOM - amount1In * FEE_BPS;
         if (adj0 * adj1 < uint256(r0) * uint256(r1) * (BPS_DENOM ** 2)) revert KViolation();
@@ -147,7 +128,6 @@ contract LitPumpPair is ERC20, ReentrancyGuard {
         require(ok, "transfer fail");
     }
 
-    /// @dev Babylonian square root (Uniswap V2 reference).
     function _sqrt(uint256 y) internal pure returns (uint256 z) {
         if (y > 3) {
             z = y;

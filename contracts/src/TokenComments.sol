@@ -5,12 +5,8 @@ interface ITokenFactory {
     function tokenIndexPlusOne(address token) external view returns (uint256);
 }
 
-/// @title  TokenComments
-/// @notice Lightweight on-chain comments for tokens launched via TokenFactory.
-/// @dev    Comments are restricted to launched tokens only and rate-limited per author.
-///         Storage is unbounded by design (cheap on L2); UIs are expected to paginate.
 contract TokenComments {
-    uint256 public constant COMMENT_COOLDOWN = 30;     // seconds between posts per author
+    uint256 public constant COMMENT_COOLDOWN = 30;
     uint256 public constant MAX_TEXT_LEN     = 280;
     uint256 public constant MAX_PAGE         = 100;
 
@@ -25,7 +21,7 @@ contract TokenComments {
 
     Comment[] private _comments;
     mapping(address => uint256[]) private _byToken;
-    mapping(address => uint64)    public lastCommentAt;        // unix seconds
+    mapping(address => uint64)    public lastCommentAt;
 
     event CommentPosted(
         address indexed token,

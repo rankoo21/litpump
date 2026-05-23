@@ -1,31 +1,50 @@
 # LitPump
 
-A memecoin launchpad on **LitVM** (Litecoin's L2). Launch your own token in
-one click, trade it on a bonding curve, and watch it graduate to the built-in
-DEX once it raises 85 zkLTC.
+pump.fun on LitVM (Litecoin's L2 testnet).
 
-## How it works
+Launch a token in one tx, trade it on a bonding curve, and once 85 zkLTC are
+raised the curve graduates: liquidity gets seeded on the built-in DEX and the
+LP gets burned. Creators keep 50% of the trading fees.
 
-1. **Connect your wallet** — any EVM wallet on the LitVM LiteForge testnet
-   (chain ID `4441`). The app prompts you to add the network if it's missing.
-2. **Get testnet zkLTC** — grab some from
-   [liteforge.hub.caldera.xyz](https://liteforge.hub.caldera.xyz/).
-3. **Launch a token** — click *Launch* in the header, fill in a name, symbol,
-   and image. The token starts trading immediately on a bonding curve.
-4. **Trade** — buy or sell on any token's page. Price moves with each trade
-   along the curve. 1% fee per trade, split 50/50 between the creator and the
-   protocol.
-5. **Graduate** — once a token's curve collects 85 zkLTC, it auto-migrates to
-   the built-in DEX. Liquidity is locked, and the token continues trading
-   against zkLTC on the AMM.
+Testnet only.
 
-## Features
+## Network
 
-- Anti-snipe: the first 3 blocks after launch cap each address at 0.5 zkLTC.
-- Creator fee share: 50% of every trade fee goes to whoever launched the token.
-- Slippage and deadline protection on every trade.
-- On-chain comments per token, rate-limited at 30s per author.
-- A built-in Uniswap V2-style DEX so graduated tokens keep trading on the same site.
+- Chain ID `4441`
+- RPC `https://liteforge.rpc.caldera.xyz/http`
+- Explorer https://liteforge.explorer.caldera.xyz
+- Faucet https://liteforge.hub.caldera.xyz/
+
+## Deployed contracts (LiteForge testnet)
+
+```
+TokenFactory   0x74e648c412EE36E543D208E7c2c9552a81AFe47c
+TokenComments  0x5c4D46F6b089fE6b4bd8E4f4B621D15B5EC87E99
+DEX Router     0x1926cA6dcD165Bcea9912Eae51F0279b3AD16541
+DEX Factory    0xeAb6b1eDB3b5eF2254119235eA7f9b6B4426A924
+WLTC           0xAe17Ee3EEA585a1FEE19b41A6d76F8DAcf87aC50
+```
+
+## Local dev
+
+Drop a `web/.env.local` with the addresses above (`NEXT_PUBLIC_FACTORY_ADDRESS`,
+`NEXT_PUBLIC_COMMENTS_ADDRESS`, `NEXT_PUBLIC_DEX_ROUTER`, `NEXT_PUBLIC_DEX_FACTORY`,
+`NEXT_PUBLIC_WLTC`) and a `PINATA_JWT` if you want image uploads to work, then:
+
+```
+cd web
+npm i
+npm run dev
+```
+
+Contracts:
+
+```
+cd contracts
+forge install foundry-rs/forge-std --no-commit
+forge install OpenZeppelin/openzeppelin-contracts --no-commit
+forge test
+```
 
 ## License
 

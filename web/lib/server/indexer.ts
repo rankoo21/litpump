@@ -1,17 +1,3 @@
-/**
- * Lightweight in-process indexer.
- *
- * Scans the LitVM RPC for `TokenLaunched` (factory) + `Bought`/`Sold`/`Graduated`/`Migrated`
- * (per curve) events, persists them to a local SQLite database, and exposes
- * thin query helpers consumed by API routes. The aim is a < 200ms response on
- * every page load instead of the multi-second `getLogs` + N+1 `getBlock` storm
- * the browser previously did on each render.
- *
- * This is intentionally simple — Postgres + Ponder is the production target,
- * but for testnet velocity SQLite + a singleton background loop is enough and
- * keeps deployment to a single Next.js process.
- */
-
 import "server-only";
 
 import Database from "better-sqlite3";
@@ -22,19 +8,12 @@ import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-
 const POLL_INTERVAL_MS = 8_000;
-const SCAN_BATCH       = 5_000n;     // max blocks per getLogs call (RPC-friendly)
-const STARTING_OFFSET  = 200_000n;   // initial backfill window if no checkpoint
+const SCAN_BATCH       = 5_000n;
+const STARTING_OFFSET  = 200_000n;
 const DATA_DIR         = path.join(process.cwd(), ".indexer");
 const DB_PATH          = path.join(DATA_DIR, "litpump.db");
-
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
 
 export type TokenRow = {
   address: Address;
@@ -69,9 +48,6 @@ export type TradeRow = {
   logIndex: number;
 };
 
-// ---------------------------------------------------------------------------
-// Database
-// ---------------------------------------------------------------------------
 
 let _db: Database.Database | null = null;
 
@@ -154,15 +130,9 @@ function setMeta(key: string, value: string) {
   ).run(key, value);
 }
 
-// ---------------------------------------------------------------------------
-// RPC client (server-side, never reaches the browser)
-// ---------------------------------------------------------------------------
 
 const rpc = createPublicClient({ chain: liteForge, transport: http() });
 
-// ---------------------------------------------------------------------------
-// Indexer loop
-// ---------------------------------------------------------------------------
 
 let _running = false;
 let _started = false;
@@ -422,9 +392,6 @@ async function ingestLaunch(log: Log, args: any) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Query helpers — used by API routes
-// ---------------------------------------------------------------------------
 
 export function listTokens(limit = 100, offset = 0): TokenRow[] {
   startIndexer();
@@ -521,9 +488,6 @@ export function curveStats24h(curve: string): { volume24h: string; txCount24h: n
   };
 }
 
-// ---------------------------------------------------------------------------
-// Row mappers
-// ---------------------------------------------------------------------------
 
 function rowToToken(r: any): TokenRow {
   return {
@@ -562,9 +526,6 @@ function rowToTrade(r: any): TradeRow {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Holders
-// ---------------------------------------------------------------------------
 
 export type HolderRow = { address: Address; balance: string };
 

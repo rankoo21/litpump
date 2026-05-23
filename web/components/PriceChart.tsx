@@ -1,4 +1,4 @@
-ï»¿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useReadContract } from "wagmi";
@@ -132,7 +132,7 @@ export function PriceChart({ curve }: { curve: Address }) {
       </div>
 
       <div className="px-3 pt-2 pb-1 text-[11px] font-mono flex items-center gap-3" style={{ color: COLORS.text }}>
-        <span className="text-zinc-200 font-semibold">LITPUMP Â· {tf}</span>
+        <span className="text-zinc-200 font-semibold">LITPUMP · {tf}</span>
         {last ? (
           <div className="flex items-center gap-3">
             <span>O <span className="text-zinc-100">{formatPrice(last.open)}</span></span>
@@ -141,10 +141,10 @@ export function PriceChart({ curve }: { curve: Address }) {
             <span>C <span className="text-zinc-100">{formatPrice(last.close)}</span></span>
             <span style={{ color: change >= 0 ? COLORS.up : COLORS.down }}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span>
           </div>
-        ) : loading ? <span>Loadingâ€¦</span> : (
+        ) : loading ? <span>Loading…</span> : (
           <span>
             No trades yet
-            {currentPrice ? <span className="ml-2 text-zinc-300">Â· current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
+            {currentPrice ? <span className="ml-2 text-zinc-300">· current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
           </span>
         )}
       </div>
@@ -154,7 +154,7 @@ export function PriceChart({ curve }: { curve: Address }) {
              Render a subtle banner so users understand it's not broken. */}
         {!loading && trades.length > 0 && trades.length < 3 && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded-full bg-bg-soft/80 border border-bg-border text-[11px] text-zinc-400 backdrop-blur-sm pointer-events-none">
-            Just launched Â· {trades.length === 1 ? "1 trade so far" : `${trades.length} trades so far`}
+            Just launched · {trades.length === 1 ? "1 trade so far" : `${trades.length} trades so far`}
           </div>
         )}
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full block" preserveAspectRatio="none">
