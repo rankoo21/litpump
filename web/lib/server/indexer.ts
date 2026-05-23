@@ -4,15 +4,20 @@ import Database from "better-sqlite3";
 import { createPublicClient, http, decodeEventLog, type Address, type Log } from "viem";
 import path from "node:path";
 import fs from "node:fs";
+import os from "node:os";
 import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
 
 const POLL_INTERVAL_MS = 8_000;
 const SCAN_BATCH       = 5_000n;
-const STARTING_OFFSET  = 200_000n;
-const DATA_DIR         = path.join(process.cwd(), ".indexer");
-const DB_PATH          = path.join(DATA_DIR, "litpump.db");
+const STARTING_OFFSET  = 50_000n;
+// On Vercel the project root is read-only; only /tmp is writable. Use it when
+// VERCEL is set so the indexer can persist (best-effort) across warm invocations.
+const DATA_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), "litpump-indexer")
+  : path.join(process.cwd(), ".indexer");
+const DB_PATH         = path.join(DATA_DIR, "litpump.db");
 // Types
 
 export type TokenRow = {
