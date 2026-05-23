@@ -1,0 +1,18 @@
+node_modules
+.next
+out
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts
+
+# Local indexer data — regenerated automatically on first run
+.indexer/
+
+# Environments — NEVER commit any .env*
+.env
+.env.*
+!.env.example
+
+# Local logs
+*.log
+dev-startup.log

@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+/// @notice Minimal interface to a Uniswap V2-style router. Anything advertising a
+///         compatible `addLiquidityETH` (QuickSwap, LitvmSwap V2 surface, …) works.
+interface IUniswapV2Router02 {
+    function factory() external view returns (address);
+    function WETH()    external view returns (address);
+
+    function addLiquidityETH(
+        address token,
+        uint256 amountTokenDesired,
+        uint256 amountTokenMin,
+        uint256 amountETHMin,
+        address to,
+        uint256 deadline
+    ) external payable returns (uint256 amountToken, uint256 amountETH, uint256 liquidity);
+}
+
+/// @notice Subset of the V2 factory we consult to look up the LP pair address.
+interface IUniswapV2Factory {
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+}

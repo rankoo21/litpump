@@ -1,0 +1,20 @@
+# Foundry artefacts
+out/
+cache/
+broadcast/
+
+# Dependencies
+lib/
+node_modules/
+
+# Environments — NEVER commit any .env*
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+build-log.txt
+deploy-log.txt
+test-log.txt
+foundry.lock

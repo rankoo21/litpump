@@ -1,0 +1,13 @@
+# Editors / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Environments — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
