@@ -7,7 +7,6 @@ Thumbs.db
 # Environments — never commit secrets
 .env
 .env.*
-!.env.example
 
 # Logs
 *.log
