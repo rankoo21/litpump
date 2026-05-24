@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { type Address } from "viem";
 import { liteForge } from "@/lib/chain";
 import { shortAddr } from "@/lib/format";
+import { useHolders } from "@/lib/useHolders";
 import { Crown, Wrench } from "lucide-react";
 
 type Holder = { address: Address; balance: bigint };
@@ -29,30 +29,11 @@ export function HolderDistribution({
   curve: Address;
   creator: Address;
 }) {
-  const [holders, setHolders] = useState<Holder[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch(`/api/holders/${token}?limit=12`);
-        const data = await res.json();
-        if (cancelled) return;
-        const items = (data.holders ?? []) as Array<{ address: string; balance: string }>;
-        setHolders(
-          items.map((h) => ({ address: h.address as Address, balance: BigInt(h.balance) }))
-        );
-      } catch {
-        /* swallow — empty list will surface */
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
-    const id = setInterval(load, 12_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [token]);
+  const { data, isLoading } = useHolders(token, 12);
+  const holders: Holder[] = (data?.holders ?? []).map((h) => ({
+    address: h.address as Address,
+    balance: BigInt(h.balance),
+  }));
 
   // The bonding curve manages unsold supply via virtual reserves and never
   // shows up on the indexer's holder list. Synthesise a row for it equal to
@@ -75,7 +56,7 @@ export function HolderDistribution({
         </div>
       </div>
 
-      {loading && holders.length === 0 ? (
+      {isLoading && holders.length === 0 ? (
         <div className="px-4 py-8 text-center text-zinc-500 text-xs">Loading holders…</div>
       ) : allRows.length === 0 ? (
         <div className="px-4 py-8 text-center text-zinc-500 text-xs">No holders yet.</div>
