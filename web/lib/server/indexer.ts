@@ -6,10 +6,9 @@ import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
 
 // Window of recent blocks we replay on every cold-start. Chunked across
-// `SCAN_CHUNK` so we don't hit RPC range limits. Going wider means slower
-// first request after cold start; narrower means we miss old activity.
-const SCAN_BLOCK_SPAN = 200_000n;
-const SCAN_CHUNK      = 10_000n;
+// `SCAN_CHUNK` so we don't hit RPC range limits.
+const SCAN_BLOCK_SPAN = 100_000n;
+const SCAN_CHUNK      = 5_000n;
 const CACHE_TTL_MS    = 12_000;
 
 export type TokenRow = {
@@ -144,43 +143,55 @@ async function build(): Promise<Snapshot> {
   }
 
   async function getLogsAcross(args: { address: Address | Address[]; event?: any }) {
-    const out: any[] = [];
-    // Run chunks in parallel — LiteForge keeps up at this size.
+    // Run chunks in parallel — at 5k blocks per chunk × 20 chunks this is
+    // tolerable. We log on hard failures so Vercel function logs surface them.
     const results = await Promise.all(
       ranges.map((r) =>
         rpc
-          .getLogs({ address: args.address as any, event: args.event, fromBlock: r.from, toBlock: r.to })
-          .catch(() => [] as any[])
+          .getLogs({
+            address:   args.address as any,
+            event:     args.event,
+            fromBlock: r.from,
+            toBlock:   r.to,
+          })
+          .catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn("[indexer] getLogs chunk", r.from.toString(), "→", r.to.toString(), "failed:", err?.message ?? err);
+            return [] as any[];
+          })
       )
     );
-    for (const arr of results) out.push(...arr);
-    return out;
+    return results.flat();
   }
 
   // 1) Factory `TokenLaunched` logs — used to look up the on-chain creation block/timestamp.
   // 2) Curve trade events.
   // 3) Token Transfer events for holder reconstruction.
-  const [factoryLogs, tradeLogs, transferLogs] = await Promise.all([
-    getLogsAcross({ address: FACTORY_ADDRESS }),
-    getLogsAcross({ address: curveAddrs }),
-    getLogsAcross({ address: tokenAddrs, event: TRANSFER_EVENT }),
-  ]);
+  // Run them sequentially to keep RPC pressure low on Vercel cold starts.
+  const factoryLogs  = await getLogsAcross({ address: FACTORY_ADDRESS });
+  const tradeLogs    = await getLogsAcross({ address: curveAddrs });
+  const transferLogs = await getLogsAcross({ address: tokenAddrs, event: TRANSFER_EVENT });
 
-  // Resolve unique block timestamps in one parallel batch.
+  // Resolve unique block timestamps. Sequential to avoid rate-limits.
   const blockNums = new Set<bigint>();
   for (const l of factoryLogs) if (l.blockNumber) blockNums.add(l.blockNumber);
   for (const l of tradeLogs)   if (l.blockNumber) blockNums.add(l.blockNumber);
   const blockTs = new Map<bigint, number>();
-  await Promise.all(
-    [...blockNums].map(async (bn) => {
-      try {
-        const b = await rpc.getBlock({ blockNumber: bn });
-        blockTs.set(bn, Number(b.timestamp));
-      } catch {
-        blockTs.set(bn, 0);
-      }
-    })
-  );
+  // Batch in groups of 8 — small enough to not hammer the RPC, large enough to be quick.
+  const blockArr = [...blockNums];
+  for (let i = 0; i < blockArr.length; i += 8) {
+    const slice = blockArr.slice(i, i + 8);
+    await Promise.all(
+      slice.map(async (bn) => {
+        try {
+          const b = await rpc.getBlock({ blockNumber: bn });
+          blockTs.set(bn, Number(b.timestamp));
+        } catch {
+          blockTs.set(bn, 0);
+        }
+      })
+    );
+  }
 
   // Map curve -> launch metadata.
   const launchByCurve = new Map<string, { ts: number; block: number }>();
