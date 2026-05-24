@@ -194,7 +194,7 @@ export default function TokenPage() {
           </div>
         </div>
 
-        <PriceChart curve={t.curve} />
+        <PriceChart curve={t.curve} symbol={t.symbol} />
 
         <TradesTable curve={t.curve} symbol={t.symbol} />
 

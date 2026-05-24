@@ -35,15 +35,16 @@ const COLORS = {
   down: "#ef4444",
 };
 
-// `lightweight-charts` v4 still exposes `addCandlestickSeries` etc. but the
-// type checker (running against newer optional declarations) trips on those
-// methods. We narrow to a permissive shape locally.
+// LitPump caps total supply at 1 billion. Charting market cap (price × cap)
+// instead of raw price keeps Y-axis labels readable — pump.fun does the same.
+const TOTAL_CAP = 1_000_000_000;
+
 type ChartV4 = IChartApi & {
   addCandlestickSeries: (opts?: any) => ISeriesApi<"Candlestick">;
   addHistogramSeries:   (opts?: any) => ISeriesApi<"Histogram">;
 };
 
-export function PriceChart({ curve }: { curve: Address }) {
+export function PriceChart({ curve, symbol }: { curve: Address; symbol?: string }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const chartRef   = useRef<HTMLDivElement>(null);
   const apiRef     = useRef<ChartV4 | null>(null);
@@ -82,30 +83,30 @@ export function PriceChart({ curve }: { curve: Address }) {
       },
       rightPriceScale: {
         borderColor:  "rgba(255,255,255,0.08)",
-        scaleMargins: { top: 0.06, bottom: 0.28 },
+        scaleMargins: { top: 0.08, bottom: 0.28 },
       },
       timeScale: {
         borderColor:    "rgba(255,255,255,0.08)",
         timeVisible:    true,
         secondsVisible: false,
-        rightOffset:    4,
+        rightOffset:    6,
         barSpacing:     8,
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: "rgba(139,147,163,0.3)", width: 1, style: LineStyle.Solid, labelBackgroundColor: "#202632" },
-        horzLine: { color: "rgba(139,147,163,0.3)", width: 1, style: LineStyle.Solid, labelBackgroundColor: "#202632" },
+        vertLine: { color: "rgba(139,147,163,0.35)", width: 1, style: LineStyle.Solid, labelBackgroundColor: "#1d232e" },
+        horzLine: { color: "rgba(139,147,163,0.35)", width: 1, style: LineStyle.Solid, labelBackgroundColor: "#1d232e" },
       },
     }) as ChartV4;
 
     const candle = chart.addCandlestickSeries({
       upColor:         COLORS.up,
-      downColor:       "#0a0d12",
+      downColor:       COLORS.down,
       borderUpColor:   COLORS.up,
       borderDownColor: COLORS.down,
       wickUpColor:     COLORS.up,
       wickDownColor:   COLORS.down,
-      priceFormat: { type: "price", precision: 12, minMove: 1e-12 },
+      priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
     });
 
     const volume = chart.addHistogramSeries({
@@ -138,18 +139,14 @@ export function PriceChart({ curve }: { curve: Address }) {
 
   const candles = useMemo(() => buildCandles(trades, BUCKETS[tf]), [trades, tf]);
 
-  // Push series data on changes. `setData` is fine for re-rendering — the
-  // expensive part is `fitContent()`, which resets the user's pan/zoom. We
-  // call it only on the very first load and when the timeframe changes.
-  // We also memoise the last-pushed candle list so we never push identical
-  // data — that's what was making the chart visibly flicker on every poll.
-  const fittedRef    = useRef<TFKey | null>(null);
-  const lastSigRef   = useRef<string>("");
+  // Push series data on changes — guard against re-pushing identical data so
+  // the chart doesn't visibly redraw on every poll.
+  const fittedRef  = useRef<TFKey | null>(null);
+  const lastSigRef = useRef<string>("");
   useEffect(() => {
     if (!candleRef.current || !volumeRef.current || !apiRef.current) return;
     if (candles.length === 0) return;
 
-    // Cheap content signature — bail out when nothing changed.
     const last = candles[candles.length - 1];
     const sig  = `${candles.length}:${last.time}:${last.close}:${last.volume}`;
     if (sig === lastSigRef.current && fittedRef.current === tf) return;
@@ -172,8 +169,6 @@ export function PriceChart({ curve }: { curve: Address }) {
       }))
     );
 
-    // Bar spacing depends on density. Apply it once per timeframe so density
-    // tweaks don't fight with the user's manual zoom.
     if (fittedRef.current !== tf) {
       const ts  = apiRef.current.timeScale();
       const len = candles.length;
@@ -185,9 +180,10 @@ export function PriceChart({ curve }: { curve: Address }) {
     }
   }, [candles, tf]);
 
-  const last   = candles[candles.length - 1];
-  const prev   = candles[candles.length - 2];
-  const change = last && prev && prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
+  const last       = candles[candles.length - 1];
+  const prev       = candles[candles.length - 2];
+  const change     = last && prev && prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
+  const livePrice  = currentPrice ? Number(formatUnits(currentPrice as bigint, 18)) * TOTAL_CAP : 0;
 
   return (
     <div ref={wrapperRef} className="card somnex-card overflow-hidden" style={{ background: COLORS.bg }}>
@@ -218,14 +214,15 @@ export function PriceChart({ curve }: { curve: Address }) {
         </div>
       </div>
 
-      <div className="px-3 pt-2 pb-1 text-[11px] font-mono flex items-center gap-3" style={{ color: COLORS.text }}>
-        <span className="text-zinc-200 font-semibold">LITPUMP - {tf}</span>
+      <div className="px-3 pt-2 pb-1 text-[11px] font-mono flex items-center gap-3 flex-wrap" style={{ color: COLORS.text }}>
+        <span className="text-zinc-200 font-semibold">${symbol ?? "TOKEN"} - {tf}</span>
+        <span className="text-zinc-500">MCap (zkLTC)</span>
         {last ? (
           <div className="flex items-center gap-3">
-            <span>O <span className="text-zinc-100">{formatPrice(last.open)}</span></span>
-            <span>H <span className="text-zinc-100">{formatPrice(last.high)}</span></span>
-            <span>L <span className="text-zinc-100">{formatPrice(last.low)}</span></span>
-            <span>C <span className="text-zinc-100">{formatPrice(last.close)}</span></span>
+            <span>O <span className="text-zinc-100">{fmtMcap(last.open)}</span></span>
+            <span>H <span className="text-zinc-100">{fmtMcap(last.high)}</span></span>
+            <span>L <span className="text-zinc-100">{fmtMcap(last.low)}</span></span>
+            <span>C <span className="text-zinc-100">{fmtMcap(last.close)}</span></span>
             <span style={{ color: change >= 0 ? COLORS.up : COLORS.down }}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span>
           </div>
         ) : isLoading ? (
@@ -233,7 +230,7 @@ export function PriceChart({ curve }: { curve: Address }) {
         ) : (
           <span>
             No trades yet
-            {currentPrice ? <span className="ml-2 text-zinc-300">- current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
+            {currentPrice ? <span className="ml-2 text-zinc-300">- live MCap {fmtMcap(livePrice)} zkLTC</span> : null}
           </span>
         )}
       </div>
@@ -248,34 +245,33 @@ function buildCandles(
   bucket: number
 ): Candle[] {
   if (trades.length === 0) return [];
-  // Sort ascending so open/close honour event order.
   const sorted = [...trades].sort((a, b) => a.ts - b.ts);
 
-  // First pass — collect price extremes and trade volumes per bucket.
+  // First pass — collect price extremes (in MCap units) and volume per bucket.
   type Agg = { time: number; high: number; low: number; close: number; volume: number };
   const map = new Map<number, Agg>();
   for (const t of sorted) {
     const time   = Math.floor(t.ts / bucket) * bucket;
     const price  = Number(formatUnits(BigInt(t.priceX1e18), 18));
+    const mcap   = price * TOTAL_CAP;
     const volume = Number(formatUnits(BigInt(t.ltc), 18));
     const a      = map.get(time);
     if (!a) {
-      map.set(time, { time, high: price, low: price, close: price, volume });
+      map.set(time, { time, high: mcap, low: mcap, close: mcap, volume });
     } else {
-      a.high   = Math.max(a.high, price);
-      a.low    = Math.min(a.low,  price);
-      a.close  = price;
+      a.high   = Math.max(a.high, mcap);
+      a.low    = Math.min(a.low,  mcap);
+      a.close  = mcap;
       a.volume += volume;
     }
   }
 
-  // Second pass — derive `open` from the previous bucket's close (standard
-  // TradingView convention). This means a single-trade bucket whose price
-  // ticked up since the last bucket renders as a real green body, instead of
-  // a flat doji line.
+  // Second pass — derive `open` from the previous bucket's close (TradingView
+  // convention). Single-trade buckets render as proper colored bodies instead
+  // of doji lines.
   const ordered = Array.from(map.values()).sort((a, b) => a.time - b.time);
   const out: Candle[] = [];
-  let prevClose = ordered[0].close; // first candle uses its own close as open (no history)
+  let prevClose = ordered[0].close;
   for (const a of ordered) {
     out.push({
       time:   a.time,
@@ -290,12 +286,10 @@ function buildCandles(
   return out;
 }
 
-function formatPrice(p: number): string {
-  if (!Number.isFinite(p) || p <= 0) return "0";
-  if (p >= 1)    return p.toFixed(4);
-  if (p >= 0.01) return p.toFixed(6);
-  if (p >= 1e-6) return p.toFixed(10);
-  const fixed = p.toFixed(18);
-  const m     = fixed.match(/^(0\.0*)(\d{1,4})/);
-  return m ? m[1] + m[2] : fixed;
+function fmtMcap(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return "0";
+  if (m >= 1_000_000) return `${(m / 1_000_000).toFixed(2)}M`;
+  if (m >= 1_000)     return `${(m / 1_000).toFixed(2)}K`;
+  if (m >= 1)         return m.toFixed(2);
+  return m.toFixed(4);
 }
