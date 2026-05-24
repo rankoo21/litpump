@@ -15,7 +15,6 @@ export async function GET(
     {
       trades: userTransactions(address, 100),
       launches: userLaunches(address),
-    },
-    { headers: { "Cache-Control": "public, s-maxage=4, max-age=8, stale-while-revalidate=30" } }
+    }
   );
 }

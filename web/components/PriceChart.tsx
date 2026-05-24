@@ -13,13 +13,11 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { CURVE_ABI } from "@/lib/abi";
+import { useTrades } from "@/lib/useTrades";
 import { Camera, Expand, RotateCcw, Settings } from "lucide-react";
 
-type TradePoint = { ts: number; price: number; volume: number; kind: "buy" | "sell" };
-type Candle    = { time: number; open: number; high: number; low: number; close: number; volume: number };
-type LinePoint = { time: number; value: number; volume: number };
-type TFKey     = "1m" | "5m" | "30m" | "1h" | "6h" | "D";
-type Mode      = "line" | "candle";
+type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
+type TFKey  = "1m" | "5m" | "30m" | "1h" | "6h" | "D";
 
 const BUCKETS: Record<TFKey, number> = {
   "1m":  60,
@@ -42,22 +40,20 @@ const COLORS = {
 // methods. We narrow to a permissive shape locally.
 type ChartV4 = IChartApi & {
   addCandlestickSeries: (opts?: any) => ISeriesApi<"Candlestick">;
-  addAreaSeries:        (opts?: any) => ISeriesApi<"Area">;
   addHistogramSeries:   (opts?: any) => ISeriesApi<"Histogram">;
 };
 
 export function PriceChart({ curve }: { curve: Address }) {
-  const wrapperRef  = useRef<HTMLDivElement>(null);
-  const chartRef    = useRef<HTMLDivElement>(null);
-  const apiRef      = useRef<ChartV4 | null>(null);
-  const candleRef   = useRef<ISeriesApi<"Candlestick"> | null>(null);
-  const areaRef     = useRef<ISeriesApi<"Area"> | null>(null);
-  const volumeRef   = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const chartRef   = useRef<HTMLDivElement>(null);
+  const apiRef     = useRef<ChartV4 | null>(null);
+  const candleRef  = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeRef  = useRef<ISeriesApi<"Histogram"> | null>(null);
 
-  const [trades,  setTrades]  = useState<TradePoint[]>([]);
-  const [tf,      setTf]      = useState<TFKey>("5m");
-  const [mode,    setMode]    = useState<Mode>("line");
-  const [loading, setLoading] = useState(true);
+  const [tf, setTf] = useState<TFKey>("5m");
+
+  const { data, isLoading } = useTrades(curve, 200);
+  const trades = data?.trades ?? [];
 
   const { data: currentPrice } = useReadContract({
     address: curve,
@@ -65,33 +61,6 @@ export function PriceChart({ curve }: { curve: Address }) {
     functionName: "currentPriceX1e18",
     query: { refetchInterval: 5_000 },
   });
-
-  // Fetch trades + poll. Using cached endpoint headers means most of these
-  // never hit the indexer build path.
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res  = await fetch(`/api/trades/${curve}?limit=200`);
-        const data = await res.json();
-        if (cancelled) return;
-        const items = (data.trades ?? []) as Array<any>;
-        const out: TradePoint[] = items.map((t) => ({
-          ts:     t.ts,
-          price:  Number(formatUnits(BigInt(t.priceX1e18), 18)),
-          volume: Number(formatUnits(BigInt(t.ltc), 18)),
-          kind:   t.kind,
-        }));
-        out.sort((a, b) => a.ts - b.ts);
-        setTrades(out);
-      } catch { /* swallow */ } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
-    const id = setInterval(load, 8_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [curve]);
 
   // Build chart once.
   useEffect(() => {
@@ -137,17 +106,6 @@ export function PriceChart({ curve }: { curve: Address }) {
       wickUpColor:     COLORS.up,
       wickDownColor:   COLORS.down,
       priceFormat: { type: "price", precision: 12, minMove: 1e-12 },
-      visible: false,
-    });
-
-    const area = chart.addAreaSeries({
-      lineColor:        COLORS.up,
-      topColor:         "rgba(34,197,94,0.35)",
-      bottomColor:      "rgba(34,197,94,0)",
-      lineWidth:        2,
-      priceFormat:      { type: "price", precision: 12, minMove: 1e-12 },
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius:  4,
     });
 
     const volume = chart.addHistogramSeries({
@@ -160,7 +118,6 @@ export function PriceChart({ curve }: { curve: Address }) {
 
     apiRef.current    = chart;
     candleRef.current = candle;
-    areaRef.current   = area;
     volumeRef.current = volume;
 
     const ro = new ResizeObserver(() => {
@@ -175,45 +132,15 @@ export function PriceChart({ curve }: { curve: Address }) {
       chart.remove();
       apiRef.current    = null;
       candleRef.current = null;
-      areaRef.current   = null;
       volumeRef.current = null;
     };
   }, []);
 
   const candles = useMemo(() => buildCandles(trades, BUCKETS[tf]), [trades, tf]);
-  const line    = useMemo<LinePoint[]>(
-    // Each trade is its own point — a smooth running price exactly like
-    // pump.fun's pre-graduation chart. We bucket by 5s to stop very rapid
-    // bursts from flickering, but keep granularity high.
-    () => {
-      if (trades.length === 0) return [];
-      const bucket = 5;
-      const map    = new Map<number, LinePoint>();
-      for (const t of trades) {
-        const time = Math.floor(t.ts / bucket) * bucket;
-        const cur  = map.get(time);
-        if (cur) {
-          cur.value   = t.price;
-          cur.volume += t.volume;
-        } else {
-          map.set(time, { time, value: t.price, volume: t.volume });
-        }
-      }
-      return Array.from(map.values()).sort((a, b) => a.time - b.time);
-    },
-    [trades]
-  );
-
-  // Toggle visibility based on mode.
-  useEffect(() => {
-    if (!candleRef.current || !areaRef.current) return;
-    candleRef.current.applyOptions({ visible: mode === "candle" });
-    areaRef.current.applyOptions({ visible:   mode === "line"   });
-  }, [mode]);
 
   // Push series data on changes.
   useEffect(() => {
-    if (!candleRef.current || !areaRef.current || !volumeRef.current || !apiRef.current) return;
+    if (!candleRef.current || !volumeRef.current || !apiRef.current) return;
 
     candleRef.current.setData(
       candles.map((c) => ({
@@ -224,39 +151,24 @@ export function PriceChart({ curve }: { curve: Address }) {
         close: c.close,
       }))
     );
-    areaRef.current.setData(
-      line.map((p) => ({ time: p.time as UTCTimestamp, value: p.value }))
+    volumeRef.current.setData(
+      candles.map((c) => ({
+        time:  c.time as UTCTimestamp,
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
+      }))
     );
 
-    // Volume histogram aligns with whichever series is visible.
-    if (mode === "candle") {
-      volumeRef.current.setData(
-        candles.map((c) => ({
-          time:  c.time as UTCTimestamp,
-          value: c.volume,
-          color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
-        }))
-      );
-    } else {
-      volumeRef.current.setData(
-        line.map((p, i) => {
-          const up = i === 0 ? true : p.value >= line[i - 1].value;
-          return {
-            time:  p.time as UTCTimestamp,
-            value: p.volume,
-            color: up ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
-          };
-        })
-      );
-    }
-
-    const ts = apiRef.current.timeScale();
-    const len = mode === "candle" ? candles.length : line.length;
+    // Dynamic bar spacing — dense data packs tight, sparse data spreads out
+    // so each candle is readable. Keeps the chart from looking like hairlines
+    // when there are only a few trades.
+    const ts  = apiRef.current.timeScale();
+    const len = candles.length;
     if (len <= 12)      ts.applyOptions({ barSpacing: 28 });
     else if (len <= 30) ts.applyOptions({ barSpacing: 14 });
     else                ts.applyOptions({ barSpacing: 8  });
     ts.fitContent();
-  }, [candles, line, mode]);
+  }, [candles]);
 
   const last   = candles[candles.length - 1];
   const prev   = candles[candles.length - 2];
@@ -275,23 +187,6 @@ export function PriceChart({ curve }: { curve: Address }) {
               {k}
             </button>
           ))}
-          <div className="w-px h-4 bg-white/10 mx-1" />
-          <div className="flex items-center gap-0 rounded overflow-hidden border border-white/10">
-            <button
-              onClick={() => setMode("line")}
-              className={`px-2 py-1 text-[10px] font-medium transition ${mode === "line" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
-              type="button"
-            >
-              Line
-            </button>
-            <button
-              onClick={() => setMode("candle")}
-              className={`px-2 py-1 text-[10px] font-medium transition ${mode === "candle" ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200"}`}
-              type="button"
-            >
-              Candles
-            </button>
-          </div>
         </div>
         <div className="flex items-center gap-1 text-zinc-500">
           <button
@@ -318,7 +213,7 @@ export function PriceChart({ curve }: { curve: Address }) {
             <span>C <span className="text-zinc-100">{formatPrice(last.close)}</span></span>
             <span style={{ color: change >= 0 ? COLORS.up : COLORS.down }}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span>
           </div>
-        ) : loading ? (
+        ) : isLoading ? (
           <span>Loading...</span>
         ) : (
           <span>
@@ -333,19 +228,26 @@ export function PriceChart({ curve }: { curve: Address }) {
   );
 }
 
-function buildCandles(trades: TradePoint[], bucket: number): Candle[] {
+function buildCandles(
+  trades: Array<{ ts: number; priceX1e18: string; ltc: string }>,
+  bucket: number
+): Candle[] {
   if (trades.length === 0) return [];
   const map = new Map<number, Candle>();
-  for (const t of trades) {
-    const time = Math.floor(t.ts / bucket) * bucket;
-    const c    = map.get(time);
+  // Sort ascending so open/close honour event order.
+  const sorted = [...trades].sort((a, b) => a.ts - b.ts);
+  for (const t of sorted) {
+    const time   = Math.floor(t.ts / bucket) * bucket;
+    const price  = Number(formatUnits(BigInt(t.priceX1e18), 18));
+    const volume = Number(formatUnits(BigInt(t.ltc), 18));
+    const c      = map.get(time);
     if (!c) {
-      map.set(time, { time, open: t.price, high: t.price, low: t.price, close: t.price, volume: t.volume });
+      map.set(time, { time, open: price, high: price, low: price, close: price, volume });
     } else {
-      c.high   = Math.max(c.high, t.price);
-      c.low    = Math.min(c.low,  t.price);
-      c.close  = t.price;
-      c.volume += t.volume;
+      c.high   = Math.max(c.high, price);
+      c.low    = Math.min(c.low,  price);
+      c.close  = price;
+      c.volume += volume;
     }
   }
   return Array.from(map.values()).sort((a, b) => a.time - b.time);

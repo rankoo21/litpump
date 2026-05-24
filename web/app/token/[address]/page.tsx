@@ -14,6 +14,7 @@ import { PriceChart } from "@/components/PriceChart";
 import { HolderDistribution } from "@/components/HolderDistribution";
 import { MigrationCard } from "@/components/MigrationCard";
 import { useCurveStats } from "@/components/useCurveStats";
+import { useTrades } from "@/lib/useTrades";
 import { TokenComments } from "@/components/TokenComments";
 import { ExternalLink, Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
@@ -258,34 +259,15 @@ type Trade = {
 };
 
 function TradesTable({ curve, symbol }: { curve: Address; symbol: string }) {
-  const [trades, setTrades] = useState<Trade[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch(`/api/trades/${curve}?limit=50`);
-        const data = await res.json();
-        if (cancelled) return;
-        const items = (data.trades ?? []) as Array<any>;
-        setTrades(
-          items.map((t) => ({
-            who:    t.who   as Address,
-            kind:   t.kind  as "buy" | "sell",
-            ltc:    BigInt(t.ltc),
-            tokens: BigInt(t.tokens),
-            ts:     t.ts,
-            tx:     t.txHash as `0x${string}`,
-          }))
-        );
-      } catch {
-        /* ignore */
-      }
-    }
-    void load();
-    const id = setInterval(load, 8_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [curve]);
+  const { data } = useTrades(curve, 200);
+  const trades: Trade[] = (data?.trades ?? []).slice(0, 50).map((t) => ({
+    who:    t.who as Address,
+    kind:   t.kind,
+    ltc:    BigInt(t.ltc),
+    tokens: BigInt(t.tokens),
+    ts:     t.ts,
+    tx:     t.txHash,
+  }));
 
   return (
     <div className="card">
