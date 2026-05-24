@@ -55,8 +55,8 @@ export function Footer() {
               <FooterLink href="https://github.com/rankoo21/litpump" external>
                 <Github size={12} /> Source code
               </FooterLink>
-              <FooterLink href="https://x.com" external>
-                <Twitter size={12} /> Updates
+              <FooterLink href="https://x.com/litpump_" external>
+                <Twitter size={12} /> @litpump_
               </FooterLink>
             </ul>
           </div>
