@@ -316,6 +316,10 @@ async function build(): Promise<Snapshot> {
   for (const t of trades) {
     addCandidate(t.token, t.who);
   }
+  // Seed each token's curve address too — the curve always holds the unsold supply.
+  for (const tk of tokens) {
+    addCandidate(tk.address.toLowerCase(), tk.curve.toLowerCase());
+  }
 
   const balanceOfAbi = [{
     type: "function",
