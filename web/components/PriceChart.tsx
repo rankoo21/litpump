@@ -138,7 +138,10 @@ export function PriceChart({ curve }: { curve: Address }) {
 
   const candles = useMemo(() => buildCandles(trades, BUCKETS[tf]), [trades, tf]);
 
-  // Push series data on changes.
+  // Push series data on changes. `setData` is fine for re-rendering — the
+  // expensive part is `fitContent()`, which resets the user's pan/zoom. We
+  // call it only on the very first load and when the timeframe changes.
+  const fittedRef = useRef<TFKey | null>(null);
   useEffect(() => {
     if (!candleRef.current || !volumeRef.current || !apiRef.current) return;
 
@@ -159,16 +162,18 @@ export function PriceChart({ curve }: { curve: Address }) {
       }))
     );
 
-    // Dynamic bar spacing — dense data packs tight, sparse data spreads out
-    // so each candle is readable. Keeps the chart from looking like hairlines
-    // when there are only a few trades.
-    const ts  = apiRef.current.timeScale();
-    const len = candles.length;
-    if (len <= 12)      ts.applyOptions({ barSpacing: 28 });
-    else if (len <= 30) ts.applyOptions({ barSpacing: 14 });
-    else                ts.applyOptions({ barSpacing: 8  });
-    ts.fitContent();
-  }, [candles]);
+    // Bar spacing depends on density. Apply it once per timeframe so density
+    // tweaks don't fight with the user's manual zoom.
+    if (fittedRef.current !== tf && candles.length > 0) {
+      const ts  = apiRef.current.timeScale();
+      const len = candles.length;
+      if (len <= 12)      ts.applyOptions({ barSpacing: 28 });
+      else if (len <= 30) ts.applyOptions({ barSpacing: 14 });
+      else                ts.applyOptions({ barSpacing: 8  });
+      ts.fitContent();
+      fittedRef.current = tf;
+    }
+  }, [candles, tf]);
 
   const last   = candles[candles.length - 1];
   const prev   = candles[candles.length - 2];
