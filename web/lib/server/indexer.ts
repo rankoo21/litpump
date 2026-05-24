@@ -170,11 +170,12 @@ async function build(): Promise<Snapshot> {
 
   // 1) Factory `TokenLaunched` logs — used to look up the on-chain creation block/timestamp.
   // 2) Curve trade events.
-  // 3) Token Transfer events for holder reconstruction.
-  // Run them sequentially to keep RPC pressure low on Vercel cold starts.
+  // 3) Token Transfer events for holder reconstruction. We pull all token logs
+  //    without an event filter — some RPCs reject the topic+address combo or
+  //    silently truncate it. Decoding is filtered locally by the Transfer ABI.
   const factoryLogs  = await getLogsAcross({ address: FACTORY_ADDRESS });
   const tradeLogs    = await getLogsAcross({ address: curveAddrs });
-  const transferLogs = await getLogsAcross({ address: tokenAddrs, event: TRANSFER_EVENT });
+  const transferLogs = await getLogsAcross({ address: tokenAddrs });
 
   // Resolve unique block timestamps. Sequential to avoid rate-limits.
   const blockNums = new Set<bigint>();
@@ -285,8 +286,11 @@ async function build(): Promise<Snapshot> {
 
   // Reconstruct holder balances from Transfer events. Mints come from the
   // zero address; burns go to it. We skip both endpoints in the final list.
+  const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
   const balances = new Map<string, Map<string, bigint>>();
   for (const log of transferLogs) {
+    // Skip non-Transfer logs (e.g. Approval) emitted from the same address.
+    if (!log.topics || log.topics[0] !== TRANSFER_TOPIC) continue;
     let parsed: { args: any } | undefined;
     try {
       parsed = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics }) as any;
