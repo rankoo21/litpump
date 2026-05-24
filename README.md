@@ -8,16 +8,16 @@ Live: **https://litpump.fun**
 
 ## How it works
 
-1. **Connect your wallet** — any EVM wallet on the LitVM LiteForge testnet
+1. **Connect your wallet** any EVM wallet on the LitVM LiteForge testnet
    (chain ID `4441`). The app prompts you to add the network if it's missing.
-2. **Get testnet zkLTC** — grab some from
+2. **Get testnet zkLTC** grab some from
    [liteforge.hub.caldera.xyz](https://liteforge.hub.caldera.xyz/).
-3. **Launch a token** — click *Launch* in the header, fill in a name, symbol,
+3. **Launch a token** click *Launch* in the header, fill in a name, symbol,
    and image. The token starts trading immediately on a bonding curve.
-4. **Trade** — buy or sell on any token's page. Price moves with each trade
+4. **Trade**  buy or sell on any token's page. Price moves with each trade
    along the curve. 1% fee per trade, split 50/50 between the creator and the
    protocol.
-5. **Graduate** — once a token's curve collects 85 zkLTC, it auto-migrates to
+5. **Graduate** once a token's curve collects 85 zkLTC, it auto-migrates to
    the built-in DEX. Liquidity is locked, and the token continues trading
    against zkLTC on the AMM.
 
