@@ -20,3 +20,8 @@ public/
 dev-startup.log
 
 .vercel
+
+# Probe artifacts
+feed.json
+trades.json
+holders.json
