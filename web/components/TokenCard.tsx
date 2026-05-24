@@ -5,9 +5,10 @@ import { useReadContract } from "wagmi";
 import { CURVE_ABI } from "@/lib/abi";
 import { fmtLtc, shortAddr, timeAgo } from "@/lib/format";
 import { TokenImage, resolveURI as _resolveURI } from "./TokenImage";
-import { Globe, Send, Star, Twitter } from "lucide-react";
+import { Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
 import { safeUrl } from "@/lib/safeUrl";
+import { XIcon } from "./icons";
 import type { Address } from "viem";
 
 export const resolveURI = _resolveURI;
@@ -87,9 +88,9 @@ export function TokenCard({ t }: { t: TokenItem }) {
                 rel="noopener noreferrer"
                 onClick={stop}
                 className="w-6 h-6 rounded-md bg-bg-soft border border-bg-border flex items-center justify-center text-zinc-500 hover:text-accent hover:border-accent/40 transition"
-                title="Twitter"
+                title="X"
               >
-                <Twitter size={11} />
+                <XIcon size={10} />
               </a>
             )}
             {telegramUrl && (

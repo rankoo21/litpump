@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { BookOpen, Github, Twitter } from "lucide-react";
+import { BookOpen, Github } from "lucide-react";
 import { Logo } from "./Logo";
+import { XIcon } from "./icons";
 
 export function Footer() {
   return (
@@ -56,7 +57,7 @@ export function Footer() {
                 <Github size={12} /> Source code
               </FooterLink>
               <FooterLink href="https://x.com/litpump_" external>
-                <Twitter size={12} /> @litpump_
+                <XIcon size={11} /> @litpump_
               </FooterLink>
             </ul>
           </div>

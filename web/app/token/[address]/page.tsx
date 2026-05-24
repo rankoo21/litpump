@@ -15,10 +15,11 @@ import { HolderDistribution } from "@/components/HolderDistribution";
 import { MigrationCard } from "@/components/MigrationCard";
 import { useCurveStats } from "@/components/useCurveStats";
 import { TokenComments } from "@/components/TokenComments";
-import { ExternalLink, Globe, Send, Star, Twitter } from "lucide-react";
+import { ExternalLink, Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
 import { safeUrl } from "@/lib/safeUrl";
 import { GraduationCelebration } from "@/components/GraduationCelebration";
+import { XIcon } from "@/components/icons";
 import Link from "next/link";
 import { liteForge } from "@/lib/chain";
 
@@ -134,7 +135,7 @@ export default function TokenPage() {
                 </a>
                 {twitterUrl && (
                   <a className="inline-flex items-center gap-1 hover:text-zinc-200" href={twitterUrl} target="_blank" rel="noopener noreferrer">
-                    <Twitter size={11} /> Twitter
+                    <XIcon size={10} /> X
                   </a>
                 )}
                 {telegramUrl && (
