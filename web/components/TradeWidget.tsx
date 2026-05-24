@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { useQueryClient } from "@tanstack/react-query";
-import { formatUnits, parseEther, parseUnits, type Address } from "viem";
+import { decodeEventLog, formatUnits, parseEther, parseUnits, type Address } from "viem";
 import { CURVE_ABI, ERC20_ABI } from "@/lib/abi";
 import { fmtTokens, fmtLtc } from "@/lib/format";
 import { ArrowDownUp, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import type { RawTrade } from "@/lib/useTrades";
 
 type Mode = "buy" | "sell";
 
@@ -106,28 +107,81 @@ export function TradeWidget({
 
   const { writeContractAsync, isPending } = useWriteContract();
   const [hash, setHash] = useState<`0x${string}` | undefined>();
-  const { isLoading: isMining, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { data: receipt, isLoading: isMining, isSuccess } = useWaitForTransactionReceipt({ hash });
 
-  // After a confirmed trade we kick the indexer to rebuild and force every
-  // shared subscription (chart, recent trades, holders, user activity) to
-  // refetch. Without this users would wait for the 8s poll before seeing
-  // their own trade reflected on the page.
+  // Optimistic-style update: as soon as the receipt arrives, decode the
+  // Bought/Sold log and inject a trade row directly into the React Query
+  // cache so the chart, recent trades, and stats update instantly — no need
+  // to wait for the indexer to rebuild and the next 8s poll to kick in.
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (!isSuccess) return;
+    if (!isSuccess || !receipt) return;
     toast.success(mode === "buy" ? "Bought!" : "Sold!");
     setAmount("");
     setHash(undefined);
 
-    // Force the indexer to rebuild *now* (bypassing its 12s cache), then
-    // invalidate every shared subscription so the new trade lands instantly.
+    // 1. Find the Bought/Sold log emitted by the curve in this tx.
+    let synthetic: any = null;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== curve.toLowerCase()) continue;
+      try {
+        const parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics }) as any;
+        if (parsed.eventName !== "Bought" && parsed.eventName !== "Sold") continue;
+        const a     = parsed.args;
+        const isBuy = parsed.eventName === "Bought";
+        synthetic = {
+          curve:        curve.toLowerCase(),
+          token:        token.toLowerCase(),
+          symbol,
+          imageURI:     "",
+          kind:         isBuy ? "buy" : "sell",
+          who:          ((isBuy ? a.buyer : a.seller) as string).toLowerCase(),
+          ltc:          ((isBuy ? a.ltcIn  : a.ltcOut) as bigint).toString(),
+          tokens:       ((isBuy ? a.tokensOut : a.tokensIn) as bigint).toString(),
+          priceX1e18:   (a.newPriceX1e18 as bigint).toString(),
+          ltcCollected: (a.ltcCollected as bigint).toString(),
+          tokensSold:   (a.tokensSold as bigint).toString(),
+          ts:           Math.floor(Date.now() / 1000),
+          blockNumber:  Number(receipt.blockNumber),
+          txHash:       receipt.transactionHash,
+          logIndex:     log.logIndex ?? 0,
+        };
+        break;
+      } catch { /* not our event */ }
+    }
+
+    // 2. Inject into every cached `useTrades(curve, *)` entry — the chart
+    //    polls with limit 200, recent-trades table reads from the same key,
+    //    and stats reads from limit 1.
+    if (synthetic) {
+      queryClient.setQueriesData<{ trades: any[]; stats: any } | undefined>(
+        { queryKey: ["trades", curve] },
+        (old) => {
+          if (!old) return old;
+          // De-dupe by txHash + logIndex in case the indexer raced us.
+          const exists = old.trades.some(
+            (t) => t.txHash === synthetic.txHash && t.logIndex === synthetic.logIndex
+          );
+          if (exists) return old;
+          return { ...old, trades: [synthetic, ...old.trades].slice(0, 200) };
+        }
+      );
+    }
+
+    // 3. In the background, kick a real indexer rebuild and refetch — this
+    //    backfills server-side data (volume24h, holders) without blocking
+    //    the user's view of their own trade.
     (async () => {
       try { await fetch("/api/indexer/status?force=1"); } catch { /* ignore */ }
-      queryClient.invalidateQueries({ queryKey: ["trades"]   });
-      queryClient.invalidateQueries({ queryKey: ["holders"]  });
-      queryClient.invalidateQueries({ queryKey: ["userTxs"]  });
+      queryClient.invalidateQueries({ queryKey: ["holders"] });
+      queryClient.invalidateQueries({ queryKey: ["userTxs"] });
+      // Refresh trades after a delay so server-confirmed data eventually
+      // overwrites our synthetic row.
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["trades"] });
+      }, 6_000);
     })();
-  }, [isSuccess, mode, queryClient]);
+  }, [isSuccess, receipt, mode, queryClient, curve, token, symbol]);
 
   const submit = async () => {
     if (graduated) {
