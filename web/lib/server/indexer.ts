@@ -5,10 +5,11 @@ import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
 
-// Window of recent blocks we replay on every cold-start. Matches the previous
-// SQLite version. Going wider means slower first request; narrower means we
-// miss old launches/holders.
-const SCAN_BLOCK_SPAN = 50_000n;
+// Window of recent blocks we replay on every cold-start. Chunked across
+// `SCAN_CHUNK` so we don't hit RPC range limits. Going wider means slower
+// first request after cold start; narrower means we miss old activity.
+const SCAN_BLOCK_SPAN = 200_000n;
+const SCAN_CHUNK      = 10_000n;
 const CACHE_TTL_MS    = 12_000;
 
 export type TokenRow = {
@@ -82,7 +83,7 @@ export async function ensureFresh(): Promise<void> {
   if (!isFactoryConfigured) return;
   const now = Date.now();
 
-  if (cache.tokens.length > 0 && now - cachedAt < CACHE_TTL_MS) {
+  if (now - cachedAt < CACHE_TTL_MS) {
     return;
   }
 
@@ -135,13 +136,34 @@ async function build(): Promise<Snapshot> {
   const curveAddrs = list.map((t) => t.curve as Address);
   const tokenAddrs = list.map((t) => t.token as Address);
 
+  // Chunk a wide block range into RPC-friendly windows.
+  const ranges: { from: bigint; to: bigint }[] = [];
+  for (let f = fromBlock; f <= latest; f += SCAN_CHUNK) {
+    const to = f + SCAN_CHUNK - 1n > latest ? latest : f + SCAN_CHUNK - 1n;
+    ranges.push({ from: f, to });
+  }
+
+  async function getLogsAcross(args: { address: Address | Address[]; event?: any }) {
+    const out: any[] = [];
+    // Run chunks in parallel — LiteForge keeps up at this size.
+    const results = await Promise.all(
+      ranges.map((r) =>
+        rpc
+          .getLogs({ address: args.address as any, event: args.event, fromBlock: r.from, toBlock: r.to })
+          .catch(() => [] as any[])
+      )
+    );
+    for (const arr of results) out.push(...arr);
+    return out;
+  }
+
   // 1) Factory `TokenLaunched` logs — used to look up the on-chain creation block/timestamp.
   // 2) Curve trade events.
   // 3) Token Transfer events for holder reconstruction.
   const [factoryLogs, tradeLogs, transferLogs] = await Promise.all([
-    rpc.getLogs({ address: FACTORY_ADDRESS, fromBlock, toBlock: latest }).catch(() => []),
-    rpc.getLogs({ address: curveAddrs,     fromBlock, toBlock: latest }).catch(() => []),
-    rpc.getLogs({ address: tokenAddrs, event: TRANSFER_EVENT, fromBlock, toBlock: latest }).catch(() => [] as any[]),
+    getLogsAcross({ address: FACTORY_ADDRESS }),
+    getLogsAcross({ address: curveAddrs }),
+    getLogsAcross({ address: tokenAddrs, event: TRANSFER_EVENT }),
   ]);
 
   // Resolve unique block timestamps in one parallel batch.
