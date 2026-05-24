@@ -248,24 +248,46 @@ function buildCandles(
   bucket: number
 ): Candle[] {
   if (trades.length === 0) return [];
-  const map = new Map<number, Candle>();
   // Sort ascending so open/close honour event order.
   const sorted = [...trades].sort((a, b) => a.ts - b.ts);
+
+  // First pass — collect price extremes and trade volumes per bucket.
+  type Agg = { time: number; high: number; low: number; close: number; volume: number };
+  const map = new Map<number, Agg>();
   for (const t of sorted) {
     const time   = Math.floor(t.ts / bucket) * bucket;
     const price  = Number(formatUnits(BigInt(t.priceX1e18), 18));
     const volume = Number(formatUnits(BigInt(t.ltc), 18));
-    const c      = map.get(time);
-    if (!c) {
-      map.set(time, { time, open: price, high: price, low: price, close: price, volume });
+    const a      = map.get(time);
+    if (!a) {
+      map.set(time, { time, high: price, low: price, close: price, volume });
     } else {
-      c.high   = Math.max(c.high, price);
-      c.low    = Math.min(c.low,  price);
-      c.close  = price;
-      c.volume += volume;
+      a.high   = Math.max(a.high, price);
+      a.low    = Math.min(a.low,  price);
+      a.close  = price;
+      a.volume += volume;
     }
   }
-  return Array.from(map.values()).sort((a, b) => a.time - b.time);
+
+  // Second pass — derive `open` from the previous bucket's close (standard
+  // TradingView convention). This means a single-trade bucket whose price
+  // ticked up since the last bucket renders as a real green body, instead of
+  // a flat doji line.
+  const ordered = Array.from(map.values()).sort((a, b) => a.time - b.time);
+  const out: Candle[] = [];
+  let prevClose = ordered[0].close; // first candle uses its own close as open (no history)
+  for (const a of ordered) {
+    out.push({
+      time:   a.time,
+      open:   prevClose,
+      high:   Math.max(a.high, prevClose),
+      low:    Math.min(a.low,  prevClose),
+      close:  a.close,
+      volume: a.volume,
+    });
+    prevClose = a.close;
+  }
+  return out;
 }
 
 function formatPrice(p: number): string {
