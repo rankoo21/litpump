@@ -83,7 +83,11 @@ export function PriceChart({ curve }: { curve: Address }) {
   useEffect(() => {
     if (!chartRef.current) return;
 
-    const chart = createChart(chartRef.current, {
+    const el = chartRef.current;
+
+    const chart = createChart(el, {
+      width:  el.clientWidth  || 900,
+      height: el.clientHeight || 360,
       layout: {
         background: { type: ColorType.Solid, color: COLORS.bg },
         textColor:  COLORS.text,
@@ -110,7 +114,6 @@ export function PriceChart({ curve }: { curve: Address }) {
         vertLine: { color: "rgba(139,147,163,0.3)", width: 1, style: 0, labelBackgroundColor: "#202632" },
         horzLine: { color: "rgba(139,147,163,0.3)", width: 1, style: 0, labelBackgroundColor: "#202632" },
       },
-      autoSize: true,
     });
 
     const candle = chart.addCandlestickSeries({
@@ -121,9 +124,9 @@ export function PriceChart({ curve }: { curve: Address }) {
       wickUpColor:     COLORS.up,
       wickDownColor:   COLORS.down,
       priceFormat: {
-        type: "custom",
-        formatter: formatPrice,
-        minMove: 1e-18,
+        type: "price",
+        precision: 12,
+        minMove:   1e-12,
       },
     });
 
@@ -135,13 +138,22 @@ export function PriceChart({ curve }: { curve: Address }) {
       scaleMargins: { top: 0.78, bottom: 0 },
     });
 
-    apiRef.current   = chart;
+    apiRef.current    = chart;
     candleRef.current = candle;
     volumeRef.current = volume;
 
+    // Resize chart whenever the container changes size.
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      if (w > 0 && h > 0) chart.resize(w, h);
+    });
+    ro.observe(el);
+
     return () => {
+      ro.disconnect();
       chart.remove();
-      apiRef.current = null;
+      apiRef.current    = null;
       candleRef.current = null;
       volumeRef.current = null;
     };
