@@ -139,34 +139,42 @@ function setMeta(key: string, value: string) {
 const rpc = createPublicClient({ chain: liteForge, transport: http() });
 
 
-let _running = false;
-let _started = false;
+let _runningPromise: Promise<void> | null = null;
+let _lastTickAt = 0;
 
-/** Start the singleton background indexer. Idempotent across hot reloads. */
-export function startIndexer() {
-  // Tolerate Next.js dev-server hot reloads by pinning a flag onto globalThis.
-  const G = globalThis as unknown as { __litpumpIndexerStarted?: boolean };
-  if (G.__litpumpIndexerStarted) return;
-  G.__litpumpIndexerStarted = true;
-  _started = true;
+const TICK_THROTTLE_MS = 5_000;
 
+/**
+ * Run a backfill if the indexer is stale. Called from every API route so
+ * Vercel serverless cold starts (which dump /tmp) recover within the first
+ * request. `setInterval` does not run between invocations on Vercel.
+ */
+export async function ensureFresh(): Promise<void> {
   if (!isFactoryConfigured) return;
-
-  const loop = async () => {
-    if (_running) return;
-    _running = true;
+  const now = Date.now();
+  if (now - _lastTickAt < TICK_THROTTLE_MS) return;
+  if (_runningPromise) return _runningPromise;
+  _runningPromise = (async () => {
     try {
       await tick();
+      _lastTickAt = Date.now();
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[indexer] tick failed:", err);
     } finally {
-      _running = false;
+      _runningPromise = null;
     }
-  };
-  // Initial run + periodic poll.
-  void loop();
-  setInterval(loop, POLL_INTERVAL_MS);
+  })();
+  return _runningPromise;
+}
+
+/** Legacy alias used by query helpers; kicks off ensureFresh + a background loop on long-lived servers. */
+export function startIndexer() {
+  void ensureFresh();
+  const G = globalThis as unknown as { __litpumpIndexerInterval?: ReturnType<typeof setInterval> };
+  if (!G.__litpumpIndexerInterval && !process.env.VERCEL) {
+    G.__litpumpIndexerInterval = setInterval(() => { void ensureFresh(); }, POLL_INTERVAL_MS);
+  }
 }
 
 /** One pass over new blocks since the last checkpoint. */
