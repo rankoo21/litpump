@@ -286,10 +286,19 @@ async function build(): Promise<Snapshot> {
 
   // Reconstruct holder balances from Transfer events. Mints come from the
   // zero address; burns go to it. We skip both endpoints in the final list.
+  // Some RPCs truncate Transfer logs over wide ranges, so we fall back to a
+  // direct `balanceOf` read for any address that appears in a trade or
+  // transfer that ended up in our window.
   const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-  const balances = new Map<string, Map<string, bigint>>();
+  const candidatesByToken = new Map<string, Set<string>>();
+  function addCandidate(token: string, who: string) {
+    if (who === "0x0000000000000000000000000000000000000000") return;
+    let s = candidatesByToken.get(token);
+    if (!s) { s = new Set(); candidatesByToken.set(token, s); }
+    s.add(who);
+  }
+
   for (const log of transferLogs) {
-    // Skip non-Transfer logs (e.g. Approval) emitted from the same address.
     if (!log.topics || log.topics[0] !== TRANSFER_TOPIC) continue;
     let parsed: { args: any } | undefined;
     try {
@@ -299,26 +308,48 @@ async function build(): Promise<Snapshot> {
 
     const a     = parsed.args as any;
     const token = (log.address as string).toLowerCase();
-    const from  = (a.from  as string).toLowerCase();
-    const to    = (a.to    as string).toLowerCase();
-    const v     = a.value as bigint;
-
-    let perToken = balances.get(token);
-    if (!perToken) { perToken = new Map(); balances.set(token, perToken); }
-
-    if (from !== "0x0000000000000000000000000000000000000000") {
-      perToken.set(from, (perToken.get(from) ?? 0n) - v);
-    }
-    if (to !== "0x0000000000000000000000000000000000000000") {
-      perToken.set(to, (perToken.get(to) ?? 0n) + v);
-    }
+    addCandidate(token, (a.from as string).toLowerCase());
+    addCandidate(token, (a.to   as string).toLowerCase());
+  }
+  // Also seed candidates from trade events so we still see holders even when
+  // Transfer logs were partially truncated by the RPC.
+  for (const t of trades) {
+    addCandidate(t.token, t.who);
   }
 
+  const balanceOfAbi = [{
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs:  [{ name: "owner", type: "address" }],
+    outputs: [{ name: "",      type: "uint256" }],
+  }] as const;
+
   const holdersByToken = new Map<string, HolderRow[]>();
-  for (const [token, perToken] of balances) {
+  for (const [token, who] of candidatesByToken) {
     const rows: HolderRow[] = [];
-    for (const [holder, bal] of perToken) {
-      if (bal > 0n) rows.push({ address: holder as Address, balance: bal.toString() });
+    const arr = [...who];
+    // Read balances in groups of 8 to avoid hammering the RPC.
+    for (let i = 0; i < arr.length; i += 8) {
+      const slice = arr.slice(i, i + 8);
+      const bals = await Promise.all(
+        slice.map(async (addr) => {
+          try {
+            const b = (await rpc.readContract({
+              address:      token as Address,
+              abi:          balanceOfAbi,
+              functionName: "balanceOf",
+              args:         [addr as Address],
+            })) as bigint;
+            return { addr, b };
+          } catch {
+            return { addr, b: 0n };
+          }
+        })
+      );
+      for (const { addr, b } of bals) {
+        if (b > 0n) rows.push({ address: addr as Address, balance: b.toString() });
+      }
     }
     rows.sort((a, b) => {
       const av = BigInt(a.balance);
