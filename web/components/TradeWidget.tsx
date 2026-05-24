@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { useQueryClient } from "@tanstack/react-query";
 import { formatUnits, parseEther, parseUnits, type Address } from "viem";
 import { CURVE_ABI, ERC20_ABI } from "@/lib/abi";
 import { fmtTokens, fmtLtc } from "@/lib/format";
@@ -107,13 +108,26 @@ export function TradeWidget({
   const [hash, setHash] = useState<`0x${string}` | undefined>();
   const { isLoading: isMining, isSuccess } = useWaitForTransactionReceipt({ hash });
 
+  // After a confirmed trade we kick the indexer to rebuild and force every
+  // shared subscription (chart, recent trades, holders, user activity) to
+  // refetch. Without this users would wait for the 8s poll before seeing
+  // their own trade reflected on the page.
+  const queryClient = useQueryClient();
   useEffect(() => {
-    if (isSuccess) {
-      toast.success(mode === "buy" ? "Bought!" : "Sold!");
-      setAmount("");
-      setHash(undefined);
-    }
-  }, [isSuccess, mode]);
+    if (!isSuccess) return;
+    toast.success(mode === "buy" ? "Bought!" : "Sold!");
+    setAmount("");
+    setHash(undefined);
+
+    // Force the indexer to rebuild *now* (bypassing its 12s cache), then
+    // invalidate every shared subscription so the new trade lands instantly.
+    (async () => {
+      try { await fetch("/api/indexer/status?force=1"); } catch { /* ignore */ }
+      queryClient.invalidateQueries({ queryKey: ["trades"]   });
+      queryClient.invalidateQueries({ queryKey: ["holders"]  });
+      queryClient.invalidateQueries({ queryKey: ["userTxs"]  });
+    })();
+  }, [isSuccess, mode, queryClient]);
 
   const submit = async () => {
     if (graduated) {

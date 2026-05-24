@@ -78,19 +78,22 @@ const TRANSFER_EVENT = {
  * cached snapshot immediately and refresh in the background (stale-while-
  * revalidate). This keeps every endpoint snappy even when the cache is past
  * its TTL.
+ *
+ * Pass `force = true` (used after a user confirms a trade) to bypass the
+ * cache TTL and block on a fresh build, so the user sees their own activity
+ * the moment the route returns.
  */
-export async function ensureFresh(): Promise<void> {
+export async function ensureFresh(force = false): Promise<void> {
   if (!isFactoryConfigured) return;
-  const now = Date.now();
+  const now   = Date.now();
   const stale = now - cachedAt >= CACHE_TTL_MS;
   const empty = cache.tokens.length === 0 && cachedAt === 0;
 
-  // Cache is fresh — nothing to do.
-  if (!stale && !empty) return;
+  if (!force && !stale && !empty) return;
 
-  // A build is already running — block only if we've never had data yet.
   if (inflight) {
-    if (empty) await inflight;
+    // Always block when forced — the caller wants a guaranteed-fresh snapshot.
+    if (force || empty) await inflight;
     return;
   }
 
@@ -109,8 +112,7 @@ export async function ensureFresh(): Promise<void> {
       inflight = null;
     });
 
-  // Block only on the very first build. Stale refreshes happen in background.
-  if (empty) await inflight;
+  if (force || empty) await inflight;
 }
 
 /** Legacy alias kept so old call sites still compile. */
