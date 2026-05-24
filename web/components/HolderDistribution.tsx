@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useReadContract } from "wagmi";
-import { formatUnits, type Address } from "viem";
-import { ERC20_ABI } from "@/lib/abi";
+import { type Address } from "viem";
 import { liteForge } from "@/lib/chain";
 import { shortAddr } from "@/lib/format";
 import { Crown, Wrench } from "lucide-react";
 
 type Holder = { address: Address; balance: bigint };
+
+// LitPump contracts mint up to a fixed cap of 1,000,000,000 tokens. Holder
+// percentages should be measured against this cap (Pump.fun's convention),
+// not against the running circulating supply — otherwise an early buyer with
+// 0.001 zkLTC would appear to own "100% of supply" while the curve still has
+// hundreds of millions to distribute.
+const TOTAL_CAP = 1_000_000_000n * 10n ** 18n;
 
 /**
  * Top-holder list for a token. Reads pre-aggregated balances from the local
@@ -26,13 +31,6 @@ export function HolderDistribution({
 }) {
   const [holders, setHolders] = useState<Holder[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const { data: totalSupply } = useReadContract({
-    address: token,
-    abi: ERC20_ABI,
-    functionName: "totalSupply",
-    query: { refetchInterval: 10_000 },
-  });
 
   useEffect(() => {
     let cancelled = false;
@@ -56,14 +54,12 @@ export function HolderDistribution({
     return () => { cancelled = true; clearInterval(id); };
   }, [token]);
 
-  const supply = (totalSupply as bigint | undefined) ?? 0n;
-
-  // The bonding curve manages unsold supply via virtual reserves rather than
-  // real ERC-20 balances, so it never appears in the indexer's holder list.
-  // We synthesise a "Bonding curve" row equal to the gap between totalSupply
-  // and the sum of detected holders so the chart adds up to 100%.
-  const detected = holders.reduce((acc, h) => acc + h.balance, 0n);
-  const curveSupply = supply > detected ? supply - detected : 0n;
+  // The bonding curve manages unsold supply via virtual reserves and never
+  // shows up on the indexer's holder list. Synthesise a row for it equal to
+  // the gap between the fixed cap and the sum of detected holders so the
+  // distribution sums to 100% of total supply.
+  const detected    = holders.reduce((acc, h) => acc + h.balance, 0n);
+  const curveSupply = TOTAL_CAP > detected ? TOTAL_CAP - detected : 0n;
   const allRows: Holder[] = curveSupply > 0n
     ? [{ address: curve, balance: curveSupply }, ...holders].sort((a, b) =>
         a.balance === b.balance ? 0 : a.balance > b.balance ? -1 : 1
@@ -86,7 +82,7 @@ export function HolderDistribution({
       ) : (
         <div className="divide-y divide-bg-border">
           {allRows.map((h) => {
-            const pct = supply > 0n ? Number((h.balance * 10_000n) / supply) / 100 : 0;
+            const pct = TOTAL_CAP > 0n ? Number((h.balance * 10_000n) / TOTAL_CAP) / 100 : 0;
             const tag = labelFor(h.address, { curve, creator });
             return (
               <a
@@ -139,8 +135,4 @@ function labelFor(
     };
   }
   return null;
-}
-
-export function formatBalance(b: bigint): string {
-  return Number(formatUnits(b, 18)).toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
