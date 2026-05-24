@@ -363,7 +363,8 @@ async function build(): Promise<Snapshot> {
   // eslint-disable-next-line no-console
   console.log(
     `[indexer] build done: tokens=${tokens.length} trades=${trades.length} ` +
-    `transferLogs=${transferLogs.length} fromBlock=${fromBlock.toString()} latest=${latest.toString()}`
+    `transferLogs=${transferLogs.length} holdersTokens=${holdersByToken.size} ` +
+    `fromBlock=${fromBlock.toString()} latest=${latest.toString()}`
   );
   return { tokens, trades, holdersByToken, generatedAt: Date.now() };
 }
