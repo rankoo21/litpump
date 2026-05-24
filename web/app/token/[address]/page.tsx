@@ -216,7 +216,8 @@ export default function TokenPage() {
         <div className="card p-4 text-xs text-zinc-500 space-y-2">
           <div className="flex justify-between"><span>Token</span><span className="font-mono text-zinc-300">{shortAddr(t.token)}</span></div>
           <div className="flex justify-between"><span>Curve</span><span className="font-mono text-zinc-300">{shortAddr(t.curve)}</span></div>
-          <div className="flex justify-between"><span>Total supply</span><span className="text-zinc-300">{fmtTokens(totalSupply as bigint)}</span></div>
+          <div className="flex justify-between"><span>Circulating</span><span className="text-zinc-300">{fmtTokens(totalSupply as bigint)}</span></div>
+          <div className="flex justify-between"><span>Max supply</span><span className="text-zinc-300">1B</span></div>
           <Link href="/" className="btn btn-ghost w-full mt-2">← Back to explore</Link>
         </div>
 
