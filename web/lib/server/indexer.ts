@@ -342,7 +342,9 @@ async function build(): Promise<Snapshot> {
               args:         [addr as Address],
             })) as bigint;
             return { addr, b };
-          } catch {
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`[indexer] balanceOf ${token} ${addr} failed:`, (err as Error)?.message);
             return { addr, b: 0n };
           }
         })
@@ -357,6 +359,8 @@ async function build(): Promise<Snapshot> {
       if (av === bv) return 0;
       return av > bv ? -1 : 1;
     });
+    // eslint-disable-next-line no-console
+    console.log(`[indexer] holders ${token}: candidates=${arr.length} positive=${rows.length}`);
     holdersByToken.set(token, rows);
   }
 
