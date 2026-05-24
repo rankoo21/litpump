@@ -3,37 +3,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useReadContract } from "wagmi";
 import { formatUnits, type Address } from "viem";
+import {
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
 import { CURVE_ABI } from "@/lib/abi";
 import { Camera, Expand, RotateCcw, Settings, SlidersHorizontal } from "lucide-react";
 
 type TradePoint = { ts: number; price: number; volume: number; kind: "buy" | "sell" };
-type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
-type TFKey = "1m" | "5m" | "30m" | "1h" | "6h" | "D";
+type Candle    = { time: number; open: number; high: number; low: number; close: number; volume: number };
+type TFKey     = "1m" | "5m" | "30m" | "1h" | "6h" | "D";
 
 const BUCKETS: Record<TFKey, number> = {
-  "1m": 60,
-  "5m": 300,
+  "1m":  60,
+  "5m":  300,
   "30m": 1800,
-  "1h": 3600,
-  "6h": 21600,
-  D: 86400,
+  "1h":  3600,
+  "6h":  21600,
+  D:     86400,
 };
 
 const COLORS = {
-  bg: "#0a0d12",
-  grid: "rgba(255,255,255,0.05)",
+  bg:   "#0a0d12",
   text: "#8b93a3",
-  up: "#22c55e",
+  up:   "#22c55e",
   down: "#ef4444",
-  upFill: "#16a34a",
-  downFill: "#0a0d12",
-  accent: "#22c55e",
 };
 
 export function PriceChart({ curve }: { curve: Address }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const chartRef   = useRef<HTMLDivElement>(null);
+  const apiRef     = useRef<IChartApi | null>(null);
+  const candleRef  = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeRef  = useRef<ISeriesApi<"Histogram"> | null>(null);
+
   const [trades, setTrades] = useState<TradePoint[]>([]);
-  const [tf, setTf] = useState<TFKey>("5m");
+  const [tf, setTf]         = useState<TFKey>("5m");
   const [loading, setLoading] = useState(true);
 
   const { data: currentPrice } = useReadContract({
@@ -43,26 +53,24 @@ export function PriceChart({ curve }: { curve: Address }) {
     query: { refetchInterval: 5_000 },
   });
 
+  // Fetch trades + poll.
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      setLoading(true);
       try {
-        const res = await fetch(`/api/trades/${curve}?limit=200`, { cache: "no-store" });
+        const res  = await fetch(`/api/trades/${curve}?limit=200`, { cache: "no-store" });
         const data = await res.json();
         if (cancelled) return;
         const items = (data.trades ?? []) as Array<any>;
         const out: TradePoint[] = items.map((t) => ({
-          ts: t.ts,
-          price: Number(formatUnits(BigInt(t.priceX1e18), 18)),
+          ts:     t.ts,
+          price:  Number(formatUnits(BigInt(t.priceX1e18), 18)),
           volume: Number(formatUnits(BigInt(t.ltc), 18)),
-          kind: t.kind,
+          kind:   t.kind,
         }));
         out.sort((a, b) => a.ts - b.ts);
         setTrades(out);
-      } catch {
-        // ignore
-      } finally {
+      } catch { /* swallow */ } finally {
         if (!cancelled) setLoading(false);
       }
     }
@@ -71,44 +79,101 @@ export function PriceChart({ curve }: { curve: Address }) {
     return () => { cancelled = true; clearInterval(id); };
   }, [curve]);
 
+  // Build chart once.
+  useEffect(() => {
+    if (!chartRef.current) return;
+
+    const chart = createChart(chartRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: COLORS.bg },
+        textColor:  COLORS.text,
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize:   11,
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,0.04)" },
+        horzLines: { color: "rgba(255,255,255,0.04)" },
+      },
+      rightPriceScale: {
+        borderColor:    "rgba(255,255,255,0.08)",
+        scaleMargins:   { top: 0.06, bottom: 0.28 },
+      },
+      timeScale: {
+        borderColor:        "rgba(255,255,255,0.08)",
+        timeVisible:        true,
+        secondsVisible:     false,
+        rightOffset:        4,
+        barSpacing:         8,
+      },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: { color: "rgba(139,147,163,0.3)", width: 1, style: 0, labelBackgroundColor: "#202632" },
+        horzLine: { color: "rgba(139,147,163,0.3)", width: 1, style: 0, labelBackgroundColor: "#202632" },
+      },
+      autoSize: true,
+    });
+
+    const candle = chart.addCandlestickSeries({
+      upColor:         COLORS.up,
+      downColor:       "#0a0d12",
+      borderUpColor:   COLORS.up,
+      borderDownColor: COLORS.down,
+      wickUpColor:     COLORS.up,
+      wickDownColor:   COLORS.down,
+      priceFormat: {
+        type: "custom",
+        formatter: formatPrice,
+        minMove: 1e-18,
+      },
+    });
+
+    const volume = chart.addHistogramSeries({
+      priceFormat: { type: "volume" },
+      priceScaleId: "volume",
+    });
+    chart.priceScale("volume").applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+    });
+
+    apiRef.current   = chart;
+    candleRef.current = candle;
+    volumeRef.current = volume;
+
+    return () => {
+      chart.remove();
+      apiRef.current = null;
+      candleRef.current = null;
+      volumeRef.current = null;
+    };
+  }, []);
+
   const candles = useMemo(() => buildCandles(trades, BUCKETS[tf]), [trades, tf]);
 
-  const W = 1100;
-  const H = 360;
-  const LEFT = 12;
-  const RIGHT = 78;
-  const TOP = 12;
-  const BOTTOM = 28;
-  const VOL_H = 60;
-  const PRICE_VOL_GAP = 8;
-  const plotW = W - LEFT - RIGHT;
-  const priceH = H - TOP - BOTTOM - VOL_H - PRICE_VOL_GAP;
-  const volumeTop = TOP + priceH + PRICE_VOL_GAP;
-  const prices = candles.flatMap((c) => [c.high, c.low]).filter((v) => Number.isFinite(v) && v > 0);
-  const minPrice = prices.length ? Math.min(...prices) : 0;
-  const maxPrice = prices.length ? Math.max(...prices) : 1;
-  const pad = Math.max((maxPrice - minPrice) * 0.5, maxPrice * 0.003, 1e-12);
-  const lo = Math.max(0, minPrice - pad);
-  const hi = maxPrice + pad;
-  const span = Math.max(1e-18, hi - lo);
-  const maxVol = Math.max(...candles.map((c) => c.volume), 1e-9);
-  // Aim for ~25 candle slots so a few real candles spread out instead of
-  // clumping on the left edge. As trades pile up, the divisor grows and
-  // candles compact naturally.
-  const slotCount = Math.max(candles.length, 25);
-  const slot = plotW / slotCount;
-  const bodyW = Math.max(4, Math.min(14, slot * 0.55));
+  // Push candle data on changes.
+  useEffect(() => {
+    if (!candleRef.current || !volumeRef.current) return;
+    candleRef.current.setData(
+      candles.map((c) => ({
+        time:  c.time as UTCTimestamp,
+        open:  c.open,
+        high:  c.high,
+        low:   c.low,
+        close: c.close,
+      }))
+    );
+    volumeRef.current.setData(
+      candles.map((c) => ({
+        time:  c.time as UTCTimestamp,
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
+      }))
+    );
+    apiRef.current?.timeScale().fitContent();
+  }, [candles]);
 
-  const xFor = (i: number) => LEFT + slot * i + slot / 2;
-  const yFor = (p: number) => TOP + (1 - (p - lo) / span) * priceH;
-  const last = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
+  const last   = candles[candles.length - 1];
+  const prev   = candles[candles.length - 2];
   const change = last && prev && prev.close > 0 ? ((last.close - prev.close) / prev.close) * 100 : 0;
-
-  const yLabels = Array.from({ length: 6 }, (_, i) => {
-    const p = hi - (span / 5) * i;
-    return { y: TOP + (priceH / 5) * i, price: p };
-  });
 
   return (
     <div ref={wrapperRef} className="card somnex-card overflow-hidden" style={{ background: COLORS.bg }}>
@@ -128,10 +193,17 @@ export function PriceChart({ curve }: { curve: Address }) {
           <button className="px-2 py-1 rounded text-zinc-500 hover:text-zinc-200 hover:bg-white/5" type="button">Indicators</button>
         </div>
         <div className="flex items-center gap-1 text-zinc-500">
-          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button"><RotateCcw size={14} /></button>
-          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button"><Settings size={14} /></button>
-          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button" onClick={() => wrapperRef.current?.requestFullscreen?.()}><Expand size={14} /></button>
-          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button"><Camera size={14} /></button>
+          <button
+            className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200"
+            type="button"
+            onClick={() => apiRef.current?.timeScale().fitContent()}
+            aria-label="Reset zoom"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button" aria-label="Settings"><Settings size={14} /></button>
+          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button" onClick={() => wrapperRef.current?.requestFullscreen?.()} aria-label="Fullscreen"><Expand size={14} /></button>
+          <button className="p-1.5 rounded hover:bg-white/5 hover:text-zinc-200" type="button" aria-label="Screenshot"><Camera size={14} /></button>
         </div>
       </div>
 
@@ -145,7 +217,9 @@ export function PriceChart({ curve }: { curve: Address }) {
             <span>C <span className="text-zinc-100">{formatPrice(last.close)}</span></span>
             <span style={{ color: change >= 0 ? COLORS.up : COLORS.down }}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</span>
           </div>
-        ) : loading ? <span>Loading...</span> : (
+        ) : loading ? (
+          <span>Loading...</span>
+        ) : (
           <span>
             No trades yet
             {currentPrice ? <span className="ml-2 text-zinc-300">- current price {formatPrice(Number(formatUnits(currentPrice as bigint, 18)))}</span> : null}
@@ -153,79 +227,7 @@ export function PriceChart({ curve }: { curve: Address }) {
         )}
       </div>
 
-      <div className="w-full" style={{ height: 360, background: COLORS.bg, position: "relative" }}>
-        {!loading && trades.length > 0 && trades.length < 3 && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded-full bg-bg-soft/80 border border-bg-border text-[11px] text-zinc-400 backdrop-blur-sm pointer-events-none">
-            Just launched - {trades.length === 1 ? "1 trade so far" : `${trades.length} trades so far`}
-          </div>
-        )}
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-full block" preserveAspectRatio="none">
-          {yLabels.map(({ y, price }, i) => (
-            <g key={`hl-${i}`}>
-              <line x1={LEFT} x2={W - RIGHT} y1={y} y2={y} stroke={COLORS.grid} vectorEffect="non-scaling-stroke" />
-              <text x={W - RIGHT + 6} y={y + 3.5} fill={COLORS.text} fontSize="10.5" fontFamily="ui-monospace, monospace">{formatPrice(price)}</text>
-            </g>
-          ))}
-          {Array.from({ length: 6 }, (_, i) => {
-            const x = LEFT + (plotW / 5) * i;
-            return <line key={`vl-${i}`} x1={x} x2={x} y1={TOP} y2={TOP + priceH} stroke={COLORS.grid} vectorEffect="non-scaling-stroke" />;
-          })}
-
-          <line x1={LEFT} x2={W - RIGHT} y1={volumeTop - 4} y2={volumeTop - 4} stroke="rgba(255,255,255,0.08)" vectorEffect="non-scaling-stroke" />
-
-          {candles.map((c, i) => {
-            const x = xFor(i);
-            const up = c.close >= c.open;
-            const color = up ? COLORS.up : COLORS.down;
-            const yOpen = yFor(c.open);
-            const yClose = yFor(c.close);
-            const yHigh = yFor(c.high);
-            const yLow = yFor(c.low);
-            const top = Math.min(yOpen, yClose);
-            const bottom = Math.max(yOpen, yClose);
-            // Doji floor — at least 3px so a flat candle still reads as a body.
-            const height = Math.max(3, bottom - top);
-            const volH = c.volume > 0 ? Math.max(2, (c.volume / maxVol) * (VOL_H - 6)) : 0;
-
-            return (
-              <g key={`${c.time}-${i}`}>
-                {volH > 0 && (
-                  <rect x={x - bodyW / 2} y={volumeTop + VOL_H - volH} width={bodyW} height={volH} fill={up ? "rgba(34,197,94,0.45)" : "rgba(239,68,68,0.45)"} rx="0.5" />
-                )}
-                <line x1={x} x2={x} y1={yHigh} y2={yLow} stroke={color} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
-                <rect x={x - bodyW / 2} y={top} width={bodyW} height={height} fill={up ? COLORS.up : COLORS.bg} stroke={color} strokeWidth="1.4" vectorEffect="non-scaling-stroke" />
-              </g>
-            );
-          })}
-
-          {last && (() => {
-            const y = yFor(last.close);
-            const color = last.close >= last.open ? COLORS.up : COLORS.down;
-            return (
-              <g>
-                <line x1={LEFT} x2={W - RIGHT} y1={y} y2={y} stroke={color} strokeOpacity="0.5" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
-                <rect x={W - RIGHT + 2} y={y - 9} width="72" height="18" rx="3" fill={color} />
-                <text x={W - RIGHT + 38} y={y + 4} textAnchor="middle" fill={COLORS.bg} fontSize="10.5" fontFamily="ui-monospace, monospace" fontWeight="700">{formatPrice(last.close)}</text>
-              </g>
-            );
-          })()}
-
-          {candles.length > 0 && (() => {
-            const ticks = Math.min(5, candles.length);
-            const step = Math.max(1, Math.floor(candles.length / ticks));
-            return Array.from({ length: ticks }, (_, i) => {
-              const idx = Math.min(candles.length - 1, i * step);
-              const c = candles[idx];
-              if (!c) return null;
-              return (
-                <text key={`tt-${i}`} x={xFor(idx)} y={H - 10} textAnchor="middle" fill={COLORS.text} fontSize="10.5" fontFamily="ui-monospace, monospace">
-                  {formatTime(c.time)}
-                </text>
-              );
-            });
-          })()}
-        </svg>
-      </div>
+      <div ref={chartRef} className="w-full" style={{ height: 360, background: COLORS.bg }} />
     </div>
   );
 }
@@ -236,26 +238,18 @@ function buildCandles(trades: TradePoint[], bucket: number): Candle[] {
   const map = new Map<number, Candle>();
   for (const t of trades) {
     const time = Math.floor(t.ts / bucket) * bucket;
-    const c = map.get(time);
+    const c    = map.get(time);
     if (!c) {
       map.set(time, { time, open: t.price, high: t.price, low: t.price, close: t.price, volume: t.volume });
     } else {
-      c.high = Math.max(c.high, t.price);
-      c.low = Math.min(c.low, t.price);
-      c.close = t.price;
+      c.high   = Math.max(c.high, t.price);
+      c.low    = Math.min(c.low,  t.price);
+      c.close  = t.price;
       c.volume += t.volume;
     }
   }
 
-  return Array.from(map.values())
-    .sort((a, b) => a.time - b.time)
-    .map((c) => {
-      if (c.high === c.low) {
-        const move = Math.max(c.high * 0.001, 1e-12);
-        return { ...c, high: c.high + move, low: Math.max(0, c.low - move) };
-      }
-      return c;
-    });
+  return Array.from(map.values()).sort((a, b) => a.time - b.time);
 }
 
 function formatPrice(p: number): string {
@@ -263,11 +257,11 @@ function formatPrice(p: number): string {
   if (p >= 1)    return p.toFixed(4);
   if (p >= 0.01) return p.toFixed(6);
   if (p >= 1e-6) return p.toFixed(10);
+  // Sub-pico: show four leading non-zero digits after the run of 0s.
   const fixed = p.toFixed(18);
-  const m = fixed.match(/^(0\.0*)(\d{1,4})/);
+  const m     = fixed.match(/^(0\.0*)(\d{1,4})/);
   return m ? m[1] + m[2] : fixed;
 }
 
-function formatTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
+// `Time` is required by the type system but we only ever use UTCTimestamp.
+export type _Time = Time;
