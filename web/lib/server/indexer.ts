@@ -73,34 +73,34 @@ const TRANSFER_EVENT = {
 } as const;
 
 /**
- * Make sure the in-memory snapshot is fresh. On Vercel each cold start sees an
- * empty cache, so the first call after wakeup will block until the snapshot is
- * built. Subsequent calls within `CACHE_TTL_MS` return immediately and refresh
- * in the background.
+ * Make sure the in-memory snapshot is fresh. The first request after a cold
+ * start blocks until the snapshot is built; subsequent requests return the
+ * cached snapshot immediately and refresh in the background (stale-while-
+ * revalidate). This keeps every endpoint snappy even when the cache is past
+ * its TTL.
  */
 export async function ensureFresh(): Promise<void> {
   if (!isFactoryConfigured) return;
   const now = Date.now();
+  const stale = now - cachedAt >= CACHE_TTL_MS;
+  const empty = cache.tokens.length === 0 && cachedAt === 0;
 
-  if (now - cachedAt < CACHE_TTL_MS) {
-    return;
-  }
+  // Cache is fresh — nothing to do.
+  if (!stale && !empty) return;
 
+  // A build is already running — block only if we've never had data yet.
   if (inflight) {
-    if (cache.tokens.length === 0) {
-      await inflight;
-    }
+    if (empty) await inflight;
     return;
   }
 
   inflight = build()
     .then((snap) => {
-      cache = snap;
+      cache    = snap;
       cachedAt = Date.now();
       return snap;
     })
     .catch((err) => {
-      // Keep the previous cache so the UI doesn't go blank on a transient RPC failure.
       // eslint-disable-next-line no-console
       console.warn("[indexer] build failed:", err);
       return cache;
@@ -109,9 +109,8 @@ export async function ensureFresh(): Promise<void> {
       inflight = null;
     });
 
-  if (cache.tokens.length === 0) {
-    await inflight;
-  }
+  // Block only on the very first build. Stale refreshes happen in background.
+  if (empty) await inflight;
 }
 
 /** Legacy alias kept so old call sites still compile. */

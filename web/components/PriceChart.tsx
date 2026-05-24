@@ -163,7 +163,7 @@ export function PriceChart({ curve }: { curve: Address }) {
 
   // Push candle data on changes.
   useEffect(() => {
-    if (!candleRef.current || !volumeRef.current) return;
+    if (!candleRef.current || !volumeRef.current || !apiRef.current) return;
     candleRef.current.setData(
       candles.map((c) => ({
         time:  c.time as UTCTimestamp,
@@ -180,7 +180,13 @@ export function PriceChart({ curve }: { curve: Address }) {
         color: c.close >= c.open ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)",
       }))
     );
-    apiRef.current?.timeScale().fitContent();
+    // For sparse data widen the bar spacing so candles read as candles, not
+    // hairlines. Once there are enough trades the chart can pack them tight.
+    const ts = apiRef.current.timeScale();
+    if (candles.length <= 12)      ts.applyOptions({ barSpacing: 28 });
+    else if (candles.length <= 30) ts.applyOptions({ barSpacing: 14 });
+    else                           ts.applyOptions({ barSpacing: 8  });
+    ts.fitContent();
   }, [candles]);
 
   const last   = candles[candles.length - 1];
