@@ -35,17 +35,10 @@ export function HolderDistribution({
     balance: BigInt(h.balance),
   }));
 
-  // The bonding curve manages unsold supply via virtual reserves and never
-  // shows up on the indexer's holder list. Synthesise a row for it equal to
-  // the gap between the fixed cap and the sum of detected holders so the
-  // distribution sums to 100% of total supply.
-  const detected    = holders.reduce((acc, h) => acc + h.balance, 0n);
-  const curveSupply = TOTAL_CAP > detected ? TOTAL_CAP - detected : 0n;
-  const allRows: Holder[] = curveSupply > 0n
-    ? [{ address: curve, balance: curveSupply }, ...holders].sort((a, b) =>
-        a.balance === b.balance ? 0 : a.balance > b.balance ? -1 : 1
-      )
-    : holders;
+  // Show only real wallets — buyers and sellers — not the bonding curve
+  // contract itself. Percentages are still measured against the fixed 1B cap
+  // so a 0.05 zkLTC buyer reads as a fraction of total supply, not 100%.
+  const allRows = holders;
 
   return (
     <div className="card overflow-hidden">
