@@ -127,7 +127,11 @@ async function build(): Promise<Snapshot> {
     args:         [0n, 200n],
   })) as readonly any[];
 
-  if (!list || list.length === 0) return emptySnapshot();
+  if (!list || list.length === 0) {
+    // eslint-disable-next-line no-console
+    console.log("[indexer] build: no tokens registered");
+    return emptySnapshot();
+  }
 
   const latest    = await rpc.getBlockNumber();
   const fromBlock = latest > SCAN_BLOCK_SPAN ? latest - SCAN_BLOCK_SPAN : 0n;
@@ -321,6 +325,11 @@ async function build(): Promise<Snapshot> {
     holdersByToken.set(token, rows);
   }
 
+  // eslint-disable-next-line no-console
+  console.log(
+    `[indexer] build done: tokens=${tokens.length} trades=${trades.length} ` +
+    `transferLogs=${transferLogs.length} fromBlock=${fromBlock.toString()} latest=${latest.toString()}`
+  );
   return { tokens, trades, holdersByToken, generatedAt: Date.now() };
 }
 

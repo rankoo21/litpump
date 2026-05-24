@@ -9,7 +9,7 @@ import {
   coinbaseWallet,
   walletConnectWallet,
 } from "@rainbow-me/rainbowkit/wallets";
-import { createConfig, http } from "wagmi";
+import { cookieStorage, createConfig, createStorage, http } from "wagmi";
 import { liteForge } from "./chain";
 
 const wcProjectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID;
@@ -43,5 +43,7 @@ export const wagmiConfig = createConfig({
   // (`useReadContracts`, balance polling) reach for it independently of the
   // transport setting.
   batch: { multicall: false },
+  // Cookie-backed storage so SSR doesn't crash trying to reach indexedDB.
+  storage: createStorage({ storage: cookieStorage }),
   ssr: true,
 });
