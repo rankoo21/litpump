@@ -49,9 +49,9 @@ export function Footer() {
             </ul>
           </div>
 
-          {/* Trust */}
+          {/* Community */}
           <div>
-            <div className="section-heading">Trust</div>
+            <div className="section-heading">Community</div>
             <ul className="mt-3 space-y-2 text-sm">
               <FooterLink href="https://github.com/rankoo21/litpump" external>
                 <Github size={12} /> Source code
