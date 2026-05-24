@@ -27,7 +27,6 @@ Live: **https://litpump.fun**
 - Creator fee share: 50% of every trade fee goes to whoever launched the token.
 - Slippage and deadline protection on every trade.
 - On-chain comments per token, rate-limited at 30s per author.
-- A built-in Uniswap V2-style DEX so graduated tokens keep trading on the same site.
 
 ## License
 
