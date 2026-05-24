@@ -8,6 +8,9 @@ next-env.d.ts
 # Local indexer data — regenerated automatically on first run
 .indexer/
 
+# Local-only assets (logo / banner exports for socials)
+public/
+
 # Environments — NEVER commit any .env*
 .env
 .env.*
