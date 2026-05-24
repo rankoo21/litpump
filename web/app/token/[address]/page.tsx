@@ -264,7 +264,7 @@ function TradesTable({ curve, symbol }: { curve: Address; symbol: string }) {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(`/api/trades/${curve}?limit=50`, { cache: "no-store" });
+        const res = await fetch(`/api/trades/${curve}?limit=50`);
         const data = await res.json();
         if (cancelled) return;
         const items = (data.trades ?? []) as Array<any>;

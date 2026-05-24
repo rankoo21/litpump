@@ -12,5 +12,8 @@ export async function GET(
   await ensureFresh();
   const { token } = await params;
   const limit = Math.min(50, Math.max(1, Number(req.nextUrl.searchParams.get("limit")) || 12));
-  return NextResponse.json({ holders: topHolders(token, limit) });
+  return NextResponse.json(
+    { holders: topHolders(token, limit) },
+    { headers: { "Cache-Control": "public, s-maxage=4, max-age=8, stale-while-revalidate=30" } }
+  );
 }

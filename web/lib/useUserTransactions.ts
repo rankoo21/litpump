@@ -32,7 +32,7 @@ export function useUserTransactions(user: Address | undefined): { items: UserTx[
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(`/api/users/${user}`, { cache: "no-store" });
+        const res = await fetch(`/api/users/${user}`);
         const data = await res.json();
         if (cancelled) return;
         const trades = (data.trades ?? []) as Array<{

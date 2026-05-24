@@ -27,7 +27,7 @@ export function useCurveStats(curve: Address | undefined): CurveStats {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(`/api/trades/${curve}?limit=1`, { cache: "no-store" });
+        const res = await fetch(`/api/trades/${curve}?limit=1`);
         const data = await res.json();
         if (cancelled) return;
         const s = data.stats ?? {};

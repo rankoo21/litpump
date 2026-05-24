@@ -32,7 +32,7 @@ export function LiveTicker({ tokens }: { tokens: TokenItem[] }) {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch("/api/ticker?limit=30", { cache: "no-store" });
+        const res = await fetch("/api/ticker?limit=30");
         const data = await res.json();
         if (cancelled) return;
         const items = (data.trades ?? []) as Array<any>;

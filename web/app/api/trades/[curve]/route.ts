@@ -12,8 +12,15 @@ export async function GET(
   await ensureFresh();
   const { curve } = await params;
   const limit = Math.min(200, Math.max(1, Number(req.nextUrl.searchParams.get("limit")) || 50));
-  return NextResponse.json({
-    trades: recentTrades(curve, limit),
-    stats:  curveStats24h(curve),
-  });
+  return NextResponse.json(
+    {
+      trades: recentTrades(curve, limit),
+      stats:  curveStats24h(curve),
+    },
+    {
+      // Vercel CDN holds the response for 4s, lets the browser refresh after
+      // 8s, and keeps serving stale up to 30s while a refresh is running.
+      headers: { "Cache-Control": "public, s-maxage=4, max-age=8, stale-while-revalidate=30" },
+    }
+  );
 }

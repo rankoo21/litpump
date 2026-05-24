@@ -11,8 +11,11 @@ export async function GET(
 ) {
   await ensureFresh();
   const { address } = await params;
-  return NextResponse.json({
-    trades: userTransactions(address, 100),
-    launches: userLaunches(address),
-  });
+  return NextResponse.json(
+    {
+      trades: userTransactions(address, 100),
+      launches: userLaunches(address),
+    },
+    { headers: { "Cache-Control": "public, s-maxage=4, max-age=8, stale-while-revalidate=30" } }
+  );
 }

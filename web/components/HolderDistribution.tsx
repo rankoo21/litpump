@@ -38,7 +38,7 @@ export function HolderDistribution({
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(`/api/holders/${token}?limit=12`, { cache: "no-store" });
+        const res = await fetch(`/api/holders/${token}?limit=12`);
         const data = await res.json();
         if (cancelled) return;
         const items = (data.holders ?? []) as Array<{ address: string; balance: string }>;
@@ -58,22 +58,34 @@ export function HolderDistribution({
 
   const supply = (totalSupply as bigint | undefined) ?? 0n;
 
+  // The bonding curve manages unsold supply via virtual reserves rather than
+  // real ERC-20 balances, so it never appears in the indexer's holder list.
+  // We synthesise a "Bonding curve" row equal to the gap between totalSupply
+  // and the sum of detected holders so the chart adds up to 100%.
+  const detected = holders.reduce((acc, h) => acc + h.balance, 0n);
+  const curveSupply = supply > detected ? supply - detected : 0n;
+  const allRows: Holder[] = curveSupply > 0n
+    ? [{ address: curve, balance: curveSupply }, ...holders].sort((a, b) =>
+        a.balance === b.balance ? 0 : a.balance > b.balance ? -1 : 1
+      )
+    : holders;
+
   return (
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-bg-border flex items-center justify-between">
         <div className="text-sm font-semibold">Holder Distribution</div>
         <div className="text-[10px] uppercase tracking-wider text-zinc-500">
-          Top {holders.length}
+          Top {Math.min(allRows.length, 12) || 0}
         </div>
       </div>
 
       {loading && holders.length === 0 ? (
         <div className="px-4 py-8 text-center text-zinc-500 text-xs">Loading holders…</div>
-      ) : holders.length === 0 ? (
+      ) : allRows.length === 0 ? (
         <div className="px-4 py-8 text-center text-zinc-500 text-xs">No holders yet.</div>
       ) : (
         <div className="divide-y divide-bg-border">
-          {holders.map((h) => {
+          {allRows.map((h) => {
             const pct = supply > 0n ? Number((h.balance * 10_000n) / supply) / 100 : 0;
             const tag = labelFor(h.address, { curve, creator });
             return (
