@@ -107,7 +107,12 @@ export function TradeWidget({
 
   const { writeContractAsync, isPending } = useWriteContract();
   const [hash, setHash] = useState<`0x${string}` | undefined>();
-  const { data: receipt, isLoading: isMining, isSuccess } = useWaitForTransactionReceipt({ hash });
+  // Poll the receipt aggressively so the chart updates ~1s after the block
+  // is mined instead of waiting for wagmi's default 4s interval.
+  const { data: receipt, isLoading: isMining, isSuccess } = useWaitForTransactionReceipt({
+    hash,
+    pollingInterval: 1_000,
+  });
 
   // Optimistic-style update: as soon as the receipt arrives, decode the
   // Bought/Sold log and inject a trade row directly into the React Query
@@ -170,17 +175,15 @@ export function TradeWidget({
 
     // 3. In the background, kick a real indexer rebuild and refetch — this
     //    backfills server-side data (volume24h, holders) without blocking
-    //    the user's view of their own trade.
-    (async () => {
-      try { await fetch("/api/indexer/status?force=1"); } catch { /* ignore */ }
-      queryClient.invalidateQueries({ queryKey: ["holders"] });
-      queryClient.invalidateQueries({ queryKey: ["userTxs"] });
-      // Refresh trades after a delay so server-confirmed data eventually
-      // overwrites our synthetic row.
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ["trades"] });
-      }, 6_000);
-    })();
+    //    the user's view of their own trade. Fire-and-forget; no await.
+    fetch("/api/indexer/status?force=1").catch(() => { /* ignore */ });
+    queryClient.invalidateQueries({ queryKey: ["holders"] });
+    queryClient.invalidateQueries({ queryKey: ["userTxs"] });
+    // Refresh trades after a delay so server-confirmed data eventually
+    // overwrites our synthetic row.
+    setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ["trades"] });
+    }, 6_000);
   }, [isSuccess, receipt, mode, queryClient, curve, token, symbol]);
 
   const submit = async () => {
