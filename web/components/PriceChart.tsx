@@ -92,8 +92,12 @@ export function PriceChart({ curve }: { curve: Address }) {
   const hi = maxPrice + pad;
   const span = Math.max(1e-18, hi - lo);
   const maxVol = Math.max(...candles.map((c) => c.volume), 1e-9);
-  const slot = plotW / Math.max(candles.length, 10);
-  const bodyW = Math.max(6, Math.min(14, slot * 0.6));
+  // Aim for ~25 candle slots so a few real candles spread out instead of
+  // clumping on the left edge. As trades pile up, the divisor grows and
+  // candles compact naturally.
+  const slotCount = Math.max(candles.length, 25);
+  const slot = plotW / slotCount;
+  const bodyW = Math.max(4, Math.min(14, slot * 0.55));
 
   const xFor = (i: number) => LEFT + slot * i + slot / 2;
   const yFor = (p: number) => TOP + (1 - (p - lo) / span) * priceH;
@@ -179,7 +183,8 @@ export function PriceChart({ curve }: { curve: Address }) {
             const yLow = yFor(c.low);
             const top = Math.min(yOpen, yClose);
             const bottom = Math.max(yOpen, yClose);
-            const height = Math.max(2, bottom - top);
+            // Doji floor — at least 3px so a flat candle still reads as a body.
+            const height = Math.max(3, bottom - top);
             const volH = c.volume > 0 ? Math.max(2, (c.volume / maxVol) * (VOL_H - 6)) : 0;
 
             return (
