@@ -15,6 +15,7 @@ import { HolderDistribution } from "@/components/HolderDistribution";
 import { MigrationCard } from "@/components/MigrationCard";
 import { useCurveStats } from "@/components/useCurveStats";
 import { useTrades } from "@/lib/useTrades";
+import { useLiveTrades } from "@/lib/useLiveTrades";
 import { TokenComments } from "@/components/TokenComments";
 import { ExternalLink, Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
@@ -62,6 +63,9 @@ export default function TokenPage() {
   // All hooks must run unconditionally and in the same order on every render.
   const curveStats = useCurveStats(t?.curve);
   const watch = useWatchlist();
+  // Subscribe to live curve events over WebSocket so trades land on the chart
+  // and table the moment a block is mined — no waiting for the indexer poll.
+  useLiveTrades(t?.curve, t?.token ?? "0x", t?.symbol ?? "");
 
   const stats = useReadContracts({
     contracts: t

@@ -9,8 +9,14 @@ export const liteForge = defineChain({
   name: "LitVM LiteForge",
   nativeCurrency: { name: "zkLTC", symbol: "zkLTC", decimals: 18 },
   rpcUrls: {
-    default: { http: ["https://liteforge.rpc.caldera.xyz/http"] },
-    public:  { http: ["https://liteforge.rpc.caldera.xyz/http"] },
+    default: {
+      http:      ["https://liteforge.rpc.caldera.xyz/http"],
+      webSocket: ["wss://liteforge.rpc.caldera.xyz"],
+    },
+    public: {
+      http:      ["https://liteforge.rpc.caldera.xyz/http"],
+      webSocket: ["wss://liteforge.rpc.caldera.xyz"],
+    },
   },
   blockExplorers: {
     default: {

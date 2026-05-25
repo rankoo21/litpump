@@ -9,6 +9,7 @@ import { fmtTokens, fmtLtc } from "@/lib/format";
 import { ArrowDownUp, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import type { RawTrade } from "@/lib/useTrades";
+import { pushPendingTrade } from "@/lib/useTrades";
 
 type Mode = "buy" | "sell";
 
@@ -155,22 +156,15 @@ export function TradeWidget({
       } catch { /* not our event */ }
     }
 
-    // 2. Inject into every cached `useTrades(curve, *)` entry — the chart
-    //    polls with limit 200, recent-trades table reads from the same key,
-    //    and stats reads from limit 1.
+    // 2. Drop the decoded log into the shared pending-trades store. Every
+    //    `useTrades(curve, *)` poll merges this map with the server response,
+    //    so the chart/recent-trades/stats stay in sync until the indexer
+    //    catches up (then we drop it automatically).
     if (synthetic) {
-      queryClient.setQueriesData<{ trades: any[]; stats: any } | undefined>(
-        { queryKey: ["trades", curve] },
-        (old) => {
-          if (!old) return old;
-          // De-dupe by txHash + logIndex in case the indexer raced us.
-          const exists = old.trades.some(
-            (t) => t.txHash === synthetic.txHash && t.logIndex === synthetic.logIndex
-          );
-          if (exists) return old;
-          return { ...old, trades: [synthetic, ...old.trades].slice(0, 200) };
-        }
-      );
+      pushPendingTrade(curve, synthetic);
+      // Nudge React Query so subscribers re-render now instead of waiting
+      // for the next 8s poll.
+      queryClient.invalidateQueries({ queryKey: ["trades", curve] });
     }
 
     // 3. In the background, kick a real indexer rebuild and refetch — this
