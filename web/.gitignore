@@ -5,21 +5,19 @@ out
 *.tsbuildinfo
 next-env.d.ts
 
-# Local indexer data — regenerated automatically on first run
+# Local indexer data — regenerated on first run
 .indexer/
 
-# Local-only assets (logo / banner exports for socials)
+# Local-only assets (logo + banner exports for socials)
 public/
 
-# Environments — NEVER commit any .env*
+# Never commit any .env*
 .env
 .env.*
 
 # Local logs
 *.log
 dev-startup.log
-
-.vercel
 
 # Probe artifacts
 feed.json

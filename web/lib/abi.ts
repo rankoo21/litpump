@@ -295,9 +295,7 @@ export const COMMENTS_ABI = [
 ] as const;
 
 
-// =============================================================================
 // LitPump DEX (Uniswap V2-compatible fork)
-// =============================================================================
 
 export const DEX_ROUTER_ABI = [
   { type: "function", name: "factory", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
