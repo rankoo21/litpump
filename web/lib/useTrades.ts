@@ -77,8 +77,8 @@ export function useTrades(curve: Address | string | undefined, limit = 200) {
   return useQuery<Resp>({
     queryKey: ["trades", curve, limit],
     enabled,
-    queryFn: async () => {
-      const res = await fetch(`/api/trades/${curve}?limit=${limit}`);
+    queryFn: async ({ signal }) => {
+      const res = await fetch(`/api/trades/${curve}?limit=${limit}`, { signal });
       if (!res.ok) throw new Error("Trades unavailable");
       const data = (await res.json()) as Resp;
       return {
@@ -86,8 +86,14 @@ export function useTrades(curve: Address | string | undefined, limit = 200) {
         trades: reconcilePending(String(curve), data.trades ?? []),
       };
     },
-    refetchInterval: 8_000,
-    staleTime:       4_000,
-    placeholderData: (prev) => prev,
+    refetchInterval:    8_000,
+    staleTime:          4_000,
+    // Keep data fresh forever in the cache so navigating back to a token
+    // doesn't show "No trades yet" while the next poll is in flight.
+    gcTime:             5 * 60 * 1000,
+    refetchOnMount:     "always",
+    placeholderData:    (prev) => prev,
+    retry:              2,
+    retryDelay:         800,
   });
 }

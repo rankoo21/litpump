@@ -16,6 +16,7 @@ import { MigrationCard } from "@/components/MigrationCard";
 import { useCurveStats } from "@/components/useCurveStats";
 import { useTrades } from "@/lib/useTrades";
 import { useLiveTrades } from "@/lib/useLiveTrades";
+import { useDirectTrades } from "@/lib/useDirectTrades";
 import { TokenComments } from "@/components/TokenComments";
 import { ExternalLink, Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
@@ -198,9 +199,9 @@ export default function TokenPage() {
           </div>
         </div>
 
-        <PriceChart curve={t.curve} symbol={t.symbol} />
+        <PriceChart curve={t.curve} symbol={t.symbol} token={t.token} />
 
-        <TradesTable curve={t.curve} symbol={t.symbol} />
+        <TradesTable curve={t.curve} symbol={t.symbol} token={t.token} />
 
         <TokenComments token={t.token} />
       </div>
@@ -263,9 +264,17 @@ type Trade = {
   tx: `0x${string}`;
 };
 
-function TradesTable({ curve, symbol }: { curve: Address; symbol: string }) {
+function TradesTable({ curve, symbol, token }: { curve: Address; symbol: string; token: Address }) {
   const { data } = useTrades(curve, 200);
-  const trades: Trade[] = (data?.trades ?? []).slice(0, 50).map((t) => ({
+  // Direct RPC scan as a fallback for cold-starts — gives users data in
+  // ~1-2s instead of waiting for the indexer's first build (5-7s).
+  const direct = useDirectTrades(curve, token, symbol);
+
+  // Prefer server data once it's available (it's deduped + indexed). While
+  // we're waiting on the cold start, fall back to whatever the client RPC
+  // already pulled.
+  const source = data?.trades && data.trades.length > 0 ? data.trades : (direct ?? []);
+  const trades: Trade[] = source.slice(0, 50).map((t) => ({
     who:    t.who as Address,
     kind:   t.kind,
     ltc:    BigInt(t.ltc),
@@ -274,10 +283,14 @@ function TradesTable({ curve, symbol }: { curve: Address; symbol: string }) {
     tx:     t.txHash,
   }));
 
+  const ready = data !== undefined || direct !== null;
+
   return (
     <div className="card">
       <div className="px-5 py-3 border-b border-bg-border text-sm font-semibold">Recent trades</div>
-      {trades.length === 0 ? (
+      {!ready ? (
+        <div className="px-5 py-8 text-center text-zinc-500 text-sm">Loading trades…</div>
+      ) : trades.length === 0 ? (
         <div className="px-5 py-8 text-center text-zinc-500 text-sm">No trades yet.</div>
       ) : (
         <div className="divide-y divide-bg-border max-h-96 overflow-auto">

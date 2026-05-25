@@ -14,6 +14,7 @@ import {
 } from "lightweight-charts";
 import { CURVE_ABI } from "@/lib/abi";
 import { useTrades } from "@/lib/useTrades";
+import { useDirectTrades } from "@/lib/useDirectTrades";
 import { Camera, Expand, RotateCcw, Settings } from "lucide-react";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -44,7 +45,7 @@ type ChartV4 = IChartApi & {
   addHistogramSeries:   (opts?: any) => ISeriesApi<"Histogram">;
 };
 
-export function PriceChart({ curve, symbol }: { curve: Address; symbol?: string }) {
+export function PriceChart({ curve, symbol, token }: { curve: Address; symbol?: string; token?: Address }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const chartRef   = useRef<HTMLDivElement>(null);
   const apiRef     = useRef<ChartV4 | null>(null);
@@ -54,7 +55,9 @@ export function PriceChart({ curve, symbol }: { curve: Address; symbol?: string 
   const [tf, setTf] = useState<TFKey>("5m");
 
   const { data, isLoading } = useTrades(curve, 200);
-  const trades = data?.trades ?? [];
+  // Direct RPC fallback to avoid the "empty chart" gap during cold-starts.
+  const direct = useDirectTrades(curve, token ?? "0x", symbol ?? "");
+  const trades = (data?.trades && data.trades.length > 0) ? data.trades : (direct ?? []);
 
   const { data: currentPrice } = useReadContract({
     address: curve,
