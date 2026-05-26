@@ -15,6 +15,7 @@ import {
 import { CURVE_ABI } from "@/lib/abi";
 import { useTrades } from "@/lib/useTrades";
 import { useDirectTrades } from "@/lib/useDirectTrades";
+import { mergeTrades } from "@/lib/mergeTrades";
 import { Camera, Expand, RotateCcw, Settings } from "lucide-react";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
@@ -57,7 +58,7 @@ export function PriceChart({ curve, symbol, token }: { curve: Address; symbol?: 
   const { data, isLoading } = useTrades(curve, 200);
   // Direct RPC fallback to avoid the "empty chart" gap during cold-starts.
   const direct = useDirectTrades(curve, token ?? "0x", symbol ?? "");
-  const trades = (data?.trades && data.trades.length > 0) ? data.trades : (direct ?? []);
+  const trades = mergeTrades(data?.trades, direct ?? undefined);
 
   const { data: currentPrice } = useReadContract({
     address: curve,

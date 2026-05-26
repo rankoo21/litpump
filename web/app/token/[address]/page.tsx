@@ -17,6 +17,7 @@ import { useCurveStats } from "@/components/useCurveStats";
 import { useTrades } from "@/lib/useTrades";
 import { useLiveTrades } from "@/lib/useLiveTrades";
 import { useDirectTrades } from "@/lib/useDirectTrades";
+import { mergeTrades } from "@/lib/mergeTrades";
 import { TokenComments } from "@/components/TokenComments";
 import { ExternalLink, Globe, Send, Star } from "lucide-react";
 import { useWatchlist } from "@/lib/useWatchlist";
@@ -270,11 +271,10 @@ function TradesTable({ curve, symbol, token }: { curve: Address; symbol: string;
   // ~1-2s instead of waiting for the indexer's first build (5-7s).
   const direct = useDirectTrades(curve, token, symbol);
 
-  // Prefer server data once it's available (it's deduped + indexed). While
-  // we're waiting on the cold start, fall back to whatever the client RPC
-  // already pulled.
-  const source = data?.trades && data.trades.length > 0 ? data.trades : (direct ?? []);
-  const trades: Trade[] = source.slice(0, 50).map((t) => ({
+  // Merge both sources by tx+logIndex so the table never flashes "fewer
+  // trades" when one source briefly lags the other.
+  const merged = mergeTrades(data?.trades, direct ?? undefined);
+  const trades: Trade[] = merged.slice(0, 50).map((t) => ({
     who:    t.who as Address,
     kind:   t.kind,
     ltc:    BigInt(t.ltc),
