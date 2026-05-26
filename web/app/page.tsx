@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Rocket, Search, Star, ShieldCheck, Zap, TrendingUp, Coins } from "lucide-react";
 import { TokenCard, type TokenItem } from "@/components/TokenCard";
@@ -51,7 +51,13 @@ export default function HomePage() {
 
   const [sort, setSort] = useState<SortKey>("new");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const watch = useWatchlist();
+
+  // Reset to page 1 whenever filters change so users never see "page 5 of 0".
+  useEffect(() => { setPage(1); }, [sort, search, watch.list.length]);
+
+  const PAGE_SIZE = 24;
 
   const visible = useMemo(() => {
     let arr = tokens;
@@ -89,6 +95,12 @@ export default function HomePage() {
     }
     return arr;
   }, [tokens, sort, search, watch]);
+
+  const totalPages  = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage    = Math.min(page, totalPages);
+  const pageStart   = (safePage - 1) * PAGE_SIZE;
+  const pageEnd     = pageStart + PAGE_SIZE;
+  const visiblePage = visible.slice(pageStart, pageEnd);
 
   return (
     <div className="space-y-10">
@@ -250,14 +262,23 @@ export default function HomePage() {
           />
         ) : (
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {visible.map((t) => (
+            {visiblePage.map((t) => (
               <TokenCard key={t.token} t={asTokenItem(t)} />
             ))}
           </div>
         )}
 
+        {visible.length > PAGE_SIZE && (
+          <Pagination
+            page={safePage}
+            totalPages={totalPages}
+            onChange={setPage}
+          />
+        )}
+
         <div className="mt-4 text-xs text-zinc-500 text-center">
-          {visible.length} of {tokens.length} tokens · refreshes every 8s
+          Showing {visible.length === 0 ? 0 : pageStart + 1}–{Math.min(pageEnd, visible.length)} of {visible.length}
+          {visible.length !== tokens.length ? ` (filtered from ${tokens.length})` : ""} · refreshes every 8s
         </div>
       </section>
     </div>
@@ -290,6 +311,68 @@ function EmptyState({
       <div className="text-lg font-bold">{title}</div>
       <div className="mt-1.5 text-sm text-zinc-500 max-w-md mx-auto">{body}</div>
       {action && <div className="mt-5">{action}</div>}
+    </div>
+  );
+}
+
+function Pagination({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (p: number) => void;
+}) {
+  // Build a compact page list with ellipses for very long ranges.
+  const pages: (number | "...")[] = (() => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const out: (number | "...")[] = [1];
+    if (page > 3) out.push("...");
+    for (let p = Math.max(2, page - 1); p <= Math.min(totalPages - 1, page + 1); p++) out.push(p);
+    if (page < totalPages - 2) out.push("...");
+    out.push(totalPages);
+    return out;
+  })();
+
+  const btn = "min-w-[34px] h-[34px] px-2 rounded-md text-sm font-medium transition";
+
+  return (
+    <div className="mt-6 flex items-center justify-center gap-1.5 flex-wrap">
+      <button
+        type="button"
+        className={`${btn} bg-bg-soft border border-bg-border text-zinc-400 hover:text-zinc-100 disabled:opacity-40 disabled:hover:text-zinc-400`}
+        onClick={() => onChange(Math.max(1, page - 1))}
+        disabled={page <= 1}
+      >
+        ←
+      </button>
+      {pages.map((p, i) =>
+        p === "..." ? (
+          <span key={`gap-${i}`} className="px-1 text-zinc-600">…</span>
+        ) : (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onChange(p)}
+            className={`${btn} border ${
+              p === page
+                ? "bg-accent text-bg border-accent"
+                : "bg-bg-soft border-bg-border text-zinc-400 hover:text-zinc-100"
+            }`}
+          >
+            {p}
+          </button>
+        )
+      )}
+      <button
+        type="button"
+        className={`${btn} bg-bg-soft border border-bg-border text-zinc-400 hover:text-zinc-100 disabled:opacity-40 disabled:hover:text-zinc-400`}
+        onClick={() => onChange(Math.min(totalPages, page + 1))}
+        disabled={page >= totalPages}
+      >
+        →
+      </button>
     </div>
   );
 }

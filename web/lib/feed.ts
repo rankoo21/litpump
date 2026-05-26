@@ -1,32 +1,28 @@
 /**
- * Cache-backed feed builder.
+ * Feed builder for the home page + leaderboard.
  *
- * The unrefactored UI fanned out one `getLogs` per curve plus an N+1 `getBlock`
- * per log per page render. With even 50 tokens and a few dozen trades each
- * that becomes 100s of RPC calls per refresh — untenable.
+ * The naive approach (one `getLogs` per curve, one block lookup per log)
+ * collapses on a testnet RPC. We aggregate everything the UI needs into one
+ * `getFeed()` call and cache the result process-locally.
  *
- * This module aggregates everything the home page + leaderboard need into a
- * single `getFeed()` call:
+ * Two-tier caching:
+ *   - The static side (`listTokens` page from the factory) is quasi-permanent
+ *     and refreshed every `STATIC_TTL_MS` so adding tokens shows up promptly
+ *     without us re-paginating it on every poll.
+ *   - The live curve reads, log scan, and block timestamps refresh every
+ *     `CACHE_TTL_MS` and stay in memory between requests.
  *
- *   1. listTokens() once per refresh
- *   2. multicall over every curve for live state (price, mcap, graduated…)
- *   3. one `getLogs` over all curves for the last 24h
- *   4. dedupe block fetches via Promise.all on the unique block numbers
- *
- * Results are cached for `CACHE_TTL_MS` and shared across all callers so a
- * burst of identical requests collapses to a single round of RPC traffic.
- *
- * This is intentionally process-local — for production scaling, swap this for
- * a real indexer (Ponder, subgraph) backed by Postgres.
+ * To keep RPC pressure manageable on chains with hundreds of tokens, live
+ * curve state is only fetched for the top `LIVE_LIMIT` tokens. Older tokens
+ * still appear in the grid with a zeroed-out live row and the right metadata.
  */
 
-import { createPublicClient, decodeEventLog, formatUnits, http, type Address, type Log } from "viem";
+import { createPublicClient, decodeEventLog, formatUnits, http, type Address } from "viem";
 import { liteForge } from "@/lib/chain";
-import { CURVE_ABI, ERC20_ABI, FACTORY_ABI } from "@/lib/abi";
+import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS } from "@/lib/contracts";
 
 export type FeedToken = {
-  // Static info (mirrors TokenInfo from the factory).
   token: Address;
   curve: Address;
   creator: Address;
@@ -37,10 +33,9 @@ export type FeedToken = {
   twitter: string;
   telegram: string;
   website: string;
-  createdAt: number;          // unix seconds
+  createdAt: number;
 
-  // Live curve state (read via multicall).
-  priceX1e18:   string;       // bigint serialised
+  priceX1e18:   string;
   marketCapLtc: string;
   ltcCollected: string;
   tokensSold:   string;
@@ -48,41 +43,48 @@ export type FeedToken = {
   migrated:     boolean;
   graduationProgressPct: number;
 
-  // Derived from event scan.
-  volume24h:       string;    // sum of zkLTC traded over the last 24h
-  txCount24h:      number;
-  priceChange24h:  number;    // percent change vs first trade in window
-  lastTradeTs:     number;    // unix seconds, 0 if no trades
+  volume24h:      string;
+  txCount24h:     number;
+  priceChange24h: number;
+  lastTradeTs:    number;
 };
 
 export type Feed = {
-  tokens:      FeedToken[];
+  tokens: FeedToken[];
   totals: {
-    tokens:     number;
-    graduated:  number;
-    marketCap:  string;
-    raised:     string;
-    volume24h:  string;
+    tokens:    number;
+    graduated: number;
+    marketCap: string;
+    raised:    string;
+    volume24h: string;
   };
-  generatedAt: number;        // unix ms
+  generatedAt: number;
   fromBlock:   string;
   toBlock:     string;
 };
 
-const CACHE_TTL_MS    = 8_000;
+// Refresh windows.
+const CACHE_TTL_MS    = 10_000;
+const STATIC_TTL_MS   = 5 * 60_000;    // factory token list barely changes
 const SCAN_BLOCK_SPAN = 50_000n;
+// Hard cap on live state fetches per refresh — beyond this we serve a degraded
+// row (zero price, no graduation %). The grid still shows them with metadata.
+const LIVE_LIMIT      = 80;
+const RPC_BATCH       = 24;
+const ADDR_BATCH      = 50;
 
-let cached:    Feed | null = null;
-let cachedAt:  number = 0;
-let inflight:  Promise<Feed> | null = null;
+let staticList: any[] | null = null;
+let staticAt   = 0;
+
+let cached:   Feed | null = null;
+let cachedAt = 0;
+let inflight: Promise<Feed> | null = null;
 
 const client = createPublicClient({
   chain: liteForge,
   transport: http(liteForge.rpcUrls.default.http[0]),
 });
 
-/// Returns a cached feed if still fresh, otherwise builds a new one. Concurrent
-/// callers during a build share the same in-flight promise.
 export async function getFeed(): Promise<Feed> {
   const now = Date.now();
   if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
@@ -100,23 +102,40 @@ export async function getFeed(): Promise<Feed> {
   return inflight;
 }
 
-async function buildFeed(): Promise<Feed> {
-  // 1) listTokens via the factory.
-  const list = (await client.readContract({
-    address: FACTORY_ADDRESS,
-    abi: FACTORY_ABI,
-    functionName: "listTokens",
-    args: [0n, 100n],
-  })) as readonly any[];
+async function loadStatic(): Promise<any[]> {
+  const now = Date.now();
+  if (staticList && now - staticAt < STATIC_TTL_MS) return staticList;
 
-  if (!list || list.length === 0) {
-    return emptyFeed();
+  const out: any[] = [];
+  let offset = 0n;
+  const PAGE = 200n;
+  while (true) {
+    const page = (await client.readContract({
+      address:      FACTORY_ADDRESS,
+      abi:          FACTORY_ABI,
+      functionName: "listTokens",
+      args:         [offset, PAGE],
+    })) as readonly any[];
+    if (!page || page.length === 0) break;
+    out.push(...page);
+    if (BigInt(page.length) < PAGE) break;
+    offset += PAGE;
   }
+  staticList = out;
+  staticAt   = Date.now();
+  return out;
+}
 
-  // 2) Live curve state. LitVM LiteForge has no Multicall3 deployment, so we
-  //    fan out parallel `eth_call`s instead of bundling. ~7 calls per token —
-  //    fine at testnet scale, and safer than crashing on missing multicall3.
-  const liveCalls = list.flatMap((t) => [
+async function buildFeed(): Promise<Feed> {
+  const list = await loadStatic();
+  if (list.length === 0) return emptyFeed();
+
+  // Sort newest first so live state goes to the tokens users actually see.
+  const sorted = [...list].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
+  const liveTargets = sorted.slice(0, LIVE_LIMIT);
+
+  // Live curve state — batched parallel calls, capped at LIVE_LIMIT × 7 reads.
+  const liveCalls = liveTargets.flatMap((t) => [
     { address: t.curve, abi: CURVE_ABI, functionName: "currentPriceX1e18"        } as const,
     { address: t.curve, abi: CURVE_ABI, functionName: "marketCapLtc"             } as const,
     { address: t.curve, abi: CURVE_ABI, functionName: "ltcCollected"             } as const,
@@ -125,55 +144,90 @@ async function buildFeed(): Promise<Feed> {
     { address: t.curve, abi: CURVE_ABI, functionName: "migrated"                 } as const,
     { address: t.curve, abi: CURVE_ABI, functionName: "graduationProgressX1e18"  } as const,
   ]);
-  const live = await Promise.all(
-    liveCalls.map(async (c) => {
-      try {
-        const result = await client.readContract({
-          address:      c.address,
-          abi:          c.abi,
-          functionName: c.functionName,
-        });
-        return { result, status: "success" as const };
-      } catch (err) {
-        return { error: err, result: undefined, status: "failure" as const };
-      }
-    })
-  );
+  const live: Array<{ result?: any; status: "success" | "failure" }> = [];
+  for (let i = 0; i < liveCalls.length; i += RPC_BATCH) {
+    const slice = liveCalls.slice(i, i + RPC_BATCH);
+    const out   = await Promise.all(
+      slice.map(async (c) => {
+        try {
+          const result = await client.readContract({
+            address:      c.address,
+            abi:          c.abi,
+            functionName: c.functionName,
+          });
+          return { result, status: "success" as const };
+        } catch (err) {
+          return { error: err, result: undefined, status: "failure" as const };
+        }
+      })
+    );
+    live.push(...out);
+  }
 
-  // 3) One `getLogs` across every curve for the configured window.
+  const liveByCurve = new Map<string, {
+    priceX1e18: bigint;
+    mcap:       bigint;
+    raised:     bigint;
+    sold:       bigint;
+    graduated:  boolean;
+    migrated:   boolean;
+    progress:   bigint;
+  }>();
+  for (let i = 0; i < liveTargets.length; i++) {
+    const t = liveTargets[i];
+    liveByCurve.set((t.curve as string).toLowerCase(), {
+      priceX1e18: (live[i * 7 + 0]?.result as bigint) ?? 0n,
+      mcap:       (live[i * 7 + 1]?.result as bigint) ?? 0n,
+      raised:     (live[i * 7 + 2]?.result as bigint) ?? 0n,
+      sold:       (live[i * 7 + 3]?.result as bigint) ?? 0n,
+      graduated:  (live[i * 7 + 4]?.result as boolean) ?? false,
+      migrated:   (live[i * 7 + 5]?.result as boolean) ?? false,
+      progress:   (live[i * 7 + 6]?.result as bigint) ?? 0n,
+    });
+  }
+
+  // Logs over the live targets only — older tokens have static state anyway.
   const latest    = await client.getBlockNumber();
   const fromBlock = latest > SCAN_BLOCK_SPAN ? latest - SCAN_BLOCK_SPAN : 0n;
-  const curveAddrs = list.map((t) => t.curve as Address);
-  const logs = await client.getLogs({
-    address:   curveAddrs,
-    fromBlock,
-    toBlock:   latest,
-  });
+  const curveAddrs = liveTargets.map((t) => t.curve as Address);
+  const logs: any[] = [];
+  for (let i = 0; i < curveAddrs.length; i += ADDR_BATCH) {
+    const slice = curveAddrs.slice(i, i + ADDR_BATCH);
+    try {
+      const part = await client.getLogs({ address: slice, fromBlock, toBlock: latest });
+      logs.push(...part);
+    } catch { /* skip batch */ }
+  }
 
-  // Dedupe block timestamps. Many trades share blocks; this collapses N+1 to ~uniqueBlocks.
   const uniqueBlocks = Array.from(new Set(logs.map((l) => l.blockNumber!)));
-  const blockTs = new Map<bigint, number>();
-  await Promise.all(
-    uniqueBlocks.map(async (bn) => {
-      const b = await client.getBlock({ blockNumber: bn });
-      blockTs.set(bn, Number(b.timestamp));
-    })
-  );
+  const blockTs      = new Map<bigint, number>();
+  for (let i = 0; i < uniqueBlocks.length; i += RPC_BATCH) {
+    const slice = uniqueBlocks.slice(i, i + RPC_BATCH);
+    await Promise.all(
+      slice.map(async (bn) => {
+        try {
+          const b = await client.getBlock({ blockNumber: bn });
+          blockTs.set(bn, Number(b.timestamp));
+        } catch {
+          blockTs.set(bn, 0);
+        }
+      })
+    );
+  }
 
   const nowSec = Math.floor(Date.now() / 1000);
   const cutoff = nowSec - 24 * 3600;
 
-  // 4) Per-curve aggregation.
   type Agg = {
-    volume24h:      bigint;
-    txCount24h:     number;
-    firstPrice24h:  number | null;
-    lastPrice:      number | null;
-    lastTradeTs:    number;
+    volume24h:     bigint;
+    txCount24h:    number;
+    firstPrice24h: number | null;
+    lastPrice:     number | null;
+    lastTradeTs:   number;
   };
   const agg = new Map<string, Agg>();
-  for (const t of list) {
-    agg.set(t.curve.toLowerCase(), {
+  for (const t of liveTargets) {
+    agg.set((t.curve as string).toLowerCase(), {
       volume24h:     0n,
       txCount24h:    0,
       firstPrice24h: null,
@@ -183,46 +237,36 @@ async function buildFeed(): Promise<Feed> {
   }
 
   for (const log of logs) {
-    let parsed:
-      | { eventName: "Bought"; args: { ltcIn: bigint; newPriceX1e18: bigint } }
-      | { eventName: "Sold";   args: { ltcOut: bigint; newPriceX1e18: bigint } }
-      | undefined;
+    let parsed: any;
     try {
-      parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics }) as any;
-    } catch {
-      continue;
-    }
+      parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics });
+    } catch { continue; }
     if (!parsed || (parsed.eventName !== "Bought" && parsed.eventName !== "Sold")) continue;
 
     const a = agg.get(log.address.toLowerCase());
     if (!a) continue;
 
     const ts    = blockTs.get(log.blockNumber!) ?? 0;
-    const price = Number(formatUnits((parsed.args as any).newPriceX1e18, 18));
+    const price = Number(formatUnits(parsed.args.newPriceX1e18 as bigint, 18));
     a.lastPrice   = price;
     a.lastTradeTs = Math.max(a.lastTradeTs, ts);
 
     if (ts >= cutoff) {
       if (a.firstPrice24h === null) a.firstPrice24h = price;
-      const ltc = parsed.eventName === "Bought" ? (parsed.args as any).ltcIn : (parsed.args as any).ltcOut;
+      const ltc = parsed.eventName === "Bought" ? parsed.args.ltcIn : parsed.args.ltcOut;
       a.volume24h  += ltc as bigint;
       a.txCount24h += 1;
     }
   }
 
-  // 5) Compose the feed entries.
-  const tokens: FeedToken[] = list.map((t, i) => {
-    const a = agg.get((t.curve as string).toLowerCase())!;
-    const priceX1e18    = (live[i * 7 + 0]?.result as bigint) ?? 0n;
-    const marketCapLtc  = (live[i * 7 + 1]?.result as bigint) ?? 0n;
-    const ltcCollected  = (live[i * 7 + 2]?.result as bigint) ?? 0n;
-    const tokensSold    = (live[i * 7 + 3]?.result as bigint) ?? 0n;
-    const graduated     = (live[i * 7 + 4]?.result as boolean) ?? false;
-    const migrated      = (live[i * 7 + 5]?.result as boolean) ?? false;
-    const progressX1e18 = (live[i * 7 + 6]?.result as bigint) ?? 0n;
+  // Compose every token in the original list — degraded rows for the long tail.
+  const tokens: FeedToken[] = sorted.map((t) => {
+    const curveKey = (t.curve as string).toLowerCase();
+    const ls = liveByCurve.get(curveKey);
+    const a  = agg.get(curveKey);
 
     const priceChange24h =
-      a.firstPrice24h !== null && a.lastPrice !== null && a.firstPrice24h > 0
+      a && a.firstPrice24h !== null && a.lastPrice !== null && a.firstPrice24h > 0
         ? ((a.lastPrice - a.firstPrice24h) / a.firstPrice24h) * 100
         : 0;
 
@@ -239,18 +283,18 @@ async function buildFeed(): Promise<Feed> {
       website:     t.website,
       createdAt:   Number(t.createdAt),
 
-      priceX1e18:   priceX1e18.toString(),
-      marketCapLtc: marketCapLtc.toString(),
-      ltcCollected: ltcCollected.toString(),
-      tokensSold:   tokensSold.toString(),
-      graduated,
-      migrated,
-      graduationProgressPct: Number(progressX1e18) / 1e16,
+      priceX1e18:   (ls?.priceX1e18 ?? 0n).toString(),
+      marketCapLtc: (ls?.mcap       ?? 0n).toString(),
+      ltcCollected: (ls?.raised     ?? 0n).toString(),
+      tokensSold:   (ls?.sold       ?? 0n).toString(),
+      graduated:    ls?.graduated   ?? false,
+      migrated:     ls?.migrated    ?? false,
+      graduationProgressPct: ls ? Number(ls.progress) / 1e16 : 0,
 
-      volume24h:      a.volume24h.toString(),
-      txCount24h:     a.txCount24h,
+      volume24h:      (a?.volume24h ?? 0n).toString(),
+      txCount24h:     a?.txCount24h ?? 0,
       priceChange24h,
-      lastTradeTs:    a.lastTradeTs,
+      lastTradeTs:    a?.lastTradeTs ?? 0,
     };
   });
 
@@ -285,7 +329,7 @@ function emptyFeed(): Feed {
     tokens: [],
     totals: { tokens: 0, graduated: 0, marketCap: "0", raised: "0", volume24h: "0" },
     generatedAt: Date.now(),
-    fromBlock: "0",
-    toBlock:   "0",
+    fromBlock:   "0",
+    toBlock:     "0",
   };
 }
