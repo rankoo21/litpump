@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createPublicClient,
@@ -23,6 +23,7 @@ import { pushPendingTrade, type RawTrade } from "@/lib/useTrades";
  */
 export function useLiveTrades(curve: Address | string | undefined, token: Address | string, symbol: string) {
   const queryClient = useQueryClient();
+  const lastForceAt = useRef(0);
 
   useEffect(() => {
     if (!curve) return;
@@ -76,6 +77,13 @@ export function useLiveTrades(curve: Address | string | undefined, token: Addres
           // and refresh holders too — a Bought/Sold log means balances moved.
           queryClient.invalidateQueries({ queryKey: ["trades",  curve] });
           queryClient.invalidateQueries({ queryKey: ["holders"] });
+          // Force the server-side indexer to rebuild so the next poll from
+          // any viewer (not just the buyer) reflects this trade right away.
+          // Throttled so a burst of events doesn't hammer the API.
+          if (Date.now() - lastForceAt.current > 4_000) {
+            lastForceAt.current = Date.now();
+            fetch("/api/indexer/status?force=1").catch(() => {});
+          }
         },
         onError:   (err) => {
           // eslint-disable-next-line no-console
