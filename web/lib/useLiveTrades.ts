@@ -72,8 +72,10 @@ export function useLiveTrades(curve: Address | string | undefined, token: Addres
               pushPendingTrade(curve as string, trade);
             } catch { /* skip non-curve events */ }
           }
-          // Ask every `useTrades` subscriber to re-render with the merged data.
-          queryClient.invalidateQueries({ queryKey: ["trades", curve] });
+          // Ask every `useTrades` subscriber to re-render with the merged data,
+          // and refresh holders too — a Bought/Sold log means balances moved.
+          queryClient.invalidateQueries({ queryKey: ["trades",  curve] });
+          queryClient.invalidateQueries({ queryKey: ["holders"] });
         },
         onError:   (err) => {
           // eslint-disable-next-line no-console
