@@ -143,16 +143,17 @@ export function PriceChart({ curve, symbol, token }: { curve: Address; symbol?: 
 
   const candles = useMemo(() => buildCandles(trades, BUCKETS[tf]), [trades, tf]);
 
-  // Push series data on changes — guard against re-pushing identical data so
-  // the chart doesn't visibly redraw on every poll.
+  // Push series data on changes. The candle list now grows over time (empty
+  // trailing buckets), so the signature keys on the last *non-empty* trade
+  // plus the trade count to avoid pointless redraws every render tick.
   const fittedRef  = useRef<TFKey | null>(null);
   const lastSigRef = useRef<string>("");
   useEffect(() => {
     if (!candleRef.current || !volumeRef.current || !apiRef.current) return;
     if (candles.length === 0) return;
 
-    const last = candles[candles.length - 1];
-    const sig  = `${candles.length}:${last.time}:${last.close}:${last.volume}`;
+    const lastTraded = [...candles].reverse().find((c) => c.volume > 0) ?? candles[candles.length - 1];
+    const sig = `${trades.length}:${lastTraded.time}:${lastTraded.close}`;
     if (sig === lastSigRef.current && fittedRef.current === tf) return;
     lastSigRef.current = sig;
 
@@ -252,7 +253,7 @@ function buildCandles(
   const sorted = [...trades].sort((a, b) => a.ts - b.ts);
 
   // First pass — collect price extremes (in MCap units) and volume per bucket.
-  type Agg = { time: number; high: number; low: number; close: number; volume: number };
+  type Agg = { time: number; high: number; low: number; close: number; open: number; volume: number };
   const map = new Map<number, Agg>();
   for (const t of sorted) {
     const time   = Math.floor(t.ts / bucket) * bucket;
@@ -261,7 +262,7 @@ function buildCandles(
     const volume = Number(formatUnits(BigInt(t.ltc), 18));
     const a      = map.get(time);
     if (!a) {
-      map.set(time, { time, high: mcap, low: mcap, close: mcap, volume });
+      map.set(time, { time, open: mcap, high: mcap, low: mcap, close: mcap, volume });
     } else {
       a.high   = Math.max(a.high, mcap);
       a.low    = Math.min(a.low,  mcap);
@@ -270,24 +271,48 @@ function buildCandles(
     }
   }
 
-  // Second pass — derive `open` from the previous bucket's close (TradingView
-  // convention). Single-trade buckets render as proper colored bodies instead
-  // of doji lines.
-  const ordered = Array.from(map.values()).sort((a, b) => a.time - b.time);
+  const realBuckets = Array.from(map.values()).sort((a, b) => a.time - b.time);
+  const firstTime   = realBuckets[0].time;
+  const lastTrade   = realBuckets[realBuckets.length - 1].time;
+  // Add a small runway of empty buckets after the last trade (8 bars) so the
+  // latest candle isn't glued to the right edge — but don't stretch all the
+  // way to "now", which leaves a big dead gap on quiet tokens.
+  const lastTime = lastTrade + bucket * 8;
+
+  // Second pass — walk every bucket from the first trade to now. Buckets with
+  // no trades become flat candles at the running close (TradingView/pump.fun
+  // convention), so the series is continuous instead of isolated spikes.
   const out: Candle[] = [];
-  let prevClose = ordered[0].close;
-  for (const a of ordered) {
-    out.push({
-      time:   a.time,
-      open:   prevClose,
-      high:   Math.max(a.high, prevClose),
-      low:    Math.min(a.low,  prevClose),
-      close:  a.close,
-      volume: a.volume,
-    });
-    prevClose = a.close;
+  let prevClose = realBuckets[0].open;
+  for (let time = firstTime; time <= lastTime; time += bucket) {
+    const a = map.get(time);
+    if (a) {
+      out.push({
+        time:   a.time,
+        open:   prevClose,
+        high:   Math.max(a.high, prevClose),
+        low:    Math.min(a.low,  prevClose),
+        close:  a.close,
+        volume: a.volume,
+      });
+      prevClose = a.close;
+    } else {
+      // Flat "no-trade" candle — keeps the chart continuous.
+      out.push({
+        time,
+        open:   prevClose,
+        high:   prevClose,
+        low:    prevClose,
+        close:  prevClose,
+        volume: 0,
+      });
+    }
   }
-  return out;
+
+  // Cap the number of empty trailing candles so a token that hasn't traded in
+  // days doesn't render thousands of flat bars. Keep at most ~400 candles.
+  const MAX = 400;
+  return out.length > MAX ? out.slice(out.length - MAX) : out;
 }
 
 function fmtMcap(m: number): string {
