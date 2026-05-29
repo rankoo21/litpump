@@ -4,6 +4,7 @@ import { createPublicClient, decodeEventLog, http, type Address } from "viem";
 import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
+import { serverRpcUrl } from "@/lib/rpc";
 
 // Window of recent blocks we replay on every cold-start. Chunked across
 // `SCAN_CHUNK` so we don't hit RPC range limits.
@@ -59,7 +60,7 @@ let inflight: Promise<Snapshot> | null = null;
 
 const rpc = createPublicClient({
   chain: liteForge,
-  transport: http(liteForge.rpcUrls.default.http[0]),
+  transport: http(serverRpcUrl()),
 });
 
 const TRANSFER_EVENT = {

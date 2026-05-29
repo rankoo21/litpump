@@ -21,6 +21,7 @@ import { createPublicClient, decodeEventLog, formatUnits, http, type Address } f
 import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS } from "@/lib/contracts";
+import { serverRpcUrl } from "@/lib/rpc";
 
 export type FeedToken = {
   token: Address;
@@ -82,7 +83,7 @@ let inflight: Promise<Feed> | null = null;
 
 const client = createPublicClient({
   chain: liteForge,
-  transport: http(liteForge.rpcUrls.default.http[0]),
+  transport: http(serverRpcUrl()),
 });
 
 export async function getFeed(): Promise<Feed> {
