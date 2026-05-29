@@ -86,8 +86,11 @@ export function useTrades(curve: Address | string | undefined, limit = 200) {
         trades: reconcilePending(String(curve), data.trades ?? []),
       };
     },
-    refetchInterval:    8_000,
-    staleTime:          4_000,
+    // Poll fast on the token page so a viewer sees someone else's trade within
+    // a few seconds even if the WebSocket push didn't fire. The server hits a
+    // private RPC, so this is cheap.
+    refetchInterval:    3_000,
+    staleTime:          1_500,
     // Keep data fresh forever in the cache so navigating back to a token
     // doesn't show "No trades yet" while the next poll is in flight.
     gcTime:             5 * 60 * 1000,

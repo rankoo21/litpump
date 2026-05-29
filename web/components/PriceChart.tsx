@@ -41,6 +41,12 @@ const COLORS = {
 // instead of raw price keeps Y-axis labels readable — pump.fun does the same.
 const TOTAL_CAP = 1_000_000_000;
 
+// Bonding curve seed: VIRTUAL_LTC / VIRTUAL_TOKENS × TOTAL_CAP. This is the
+// market cap a token launches at, before any trade. The first candle opens
+// here so the chart shows the real move from launch to the first trade,
+// instead of starting flat at the post-first-trade price.
+const LAUNCH_MCAP = (30 / 1_073_000_000) * TOTAL_CAP; // ≈ 27.96 zkLTC
+
 type ChartV4 = IChartApi & {
   addCandlestickSeries: (opts?: any) => ISeriesApi<"Candlestick">;
   addHistogramSeries:   (opts?: any) => ISeriesApi<"Histogram">;
@@ -282,8 +288,10 @@ function buildCandles(
   // Second pass — walk every bucket from the first trade to now. Buckets with
   // no trades become flat candles at the running close (TradingView/pump.fun
   // convention), so the series is continuous instead of isolated spikes.
+  // The very first candle opens at the launch market cap so the chart shows
+  // the real ramp from launch price to the first trade.
   const out: Candle[] = [];
-  let prevClose = realBuckets[0].open;
+  let prevClose = LAUNCH_MCAP;
   for (let time = firstTime; time <= lastTime; time += bucket) {
     const a = map.get(time);
     if (a) {

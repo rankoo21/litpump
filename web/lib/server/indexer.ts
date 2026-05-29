@@ -10,7 +10,7 @@ import { serverRpcUrl } from "@/lib/rpc";
 // `SCAN_CHUNK` so we don't hit RPC range limits.
 const SCAN_BLOCK_SPAN = 100_000n;
 const SCAN_CHUNK      = 5_000n;
-const CACHE_TTL_MS    = 12_000;
+const CACHE_TTL_MS    = 3_000;
 
 export type TokenRow = {
   address: Address;
