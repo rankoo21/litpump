@@ -20,8 +20,16 @@ const buckets = new Map<string, { count: number; resetAt: number }>();
  * The actual wallet signature happens on the launch transaction itself.
  */
 export async function POST(req: NextRequest) {
-  const jwt = process.env.PINATA_JWT;
-  if (!jwt) {
+  // Support multiple Pinata accounts so we can fall back when one hits its
+  // free-tier quota. PINATA_JWT is the primary; PINATA_JWT_2, _3, … are extras.
+  const jwts = [
+    process.env.PINATA_JWT,
+    process.env.PINATA_JWT_2,
+    process.env.PINATA_JWT_3,
+    process.env.PINATA_JWT_4,
+  ].filter((v): v is string => !!v && v.length > 0);
+
+  if (jwts.length === 0) {
     return NextResponse.json(
       { error: "PINATA_JWT is not configured on the server. Add it to web/.env.local." },
       { status: 500 }
@@ -72,30 +80,45 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ---- Upload to Pinata ----
-  const body = new FormData();
-  body.append("file", file, "token-image");
-  body.append("pinataMetadata", JSON.stringify({ name: `litpump-${Date.now()}` }));
-  body.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
+  // ---- Upload to Pinata, trying each account until one succeeds ----
+  // We rebuild the FormData per attempt because a body stream can't be reused.
+  let lastError: { status: number; message: string } = { status: 502, message: "Pinata upload failed." };
 
-  const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${jwt}` },
-    body,
-  });
+  for (const jwt of jwts) {
+    const body = new FormData();
+    body.append("file", file, "token-image");
+    body.append("pinataMetadata", JSON.stringify({ name: `litpump-${Date.now()}` }));
+    body.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: data?.error?.details || data?.error || "Pinata upload failed." },
-      { status: res.status }
-    );
+    let res: Response;
+    try {
+      res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${jwt}` },
+        body,
+      });
+    } catch (err: any) {
+      lastError = { status: 502, message: err?.message || "Network error reaching Pinata." };
+      continue;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      const cid = data.IpfsHash as string;
+      return NextResponse.json({
+        cid,
+        ipfsUri:    `ipfs://${cid}`,
+        gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
+      });
+    }
+
+    // 403/payment-required/quota errors → try the next account. Other errors
+    // (e.g. 400 bad file) won't be fixed by switching, so stop.
+    const msg = data?.error?.details || data?.error?.reason || data?.error || `Pinata returned ${res.status}`;
+    lastError = { status: res.status, message: typeof msg === "string" ? msg : "Pinata upload failed." };
+    const quotaIssue = res.status === 403 || res.status === 402 || res.status === 429;
+    if (!quotaIssue) break;
   }
 
-  const cid = data.IpfsHash as string;
-  return NextResponse.json({
-    cid,
-    ipfsUri:    `ipfs://${cid}`,
-    gatewayUrl: `https://gateway.pinata.cloud/ipfs/${cid}`,
-  });
+  return NextResponse.json({ error: lastError.message }, { status: lastError.status });
 }
