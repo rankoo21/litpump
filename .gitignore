@@ -10,3 +10,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Local project notes (contains secrets / accounts — never commit)
+PROJECT_NOTES.md
