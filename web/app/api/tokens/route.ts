@@ -22,5 +22,8 @@ export async function GET(req: NextRequest) {
     tokens = listTokens(limit, offset);
   }
 
-  return NextResponse.json({ tokens });
+  return NextResponse.json(
+    { tokens },
+    { headers: { "Cache-Control": "public, s-maxage=15, stale-while-revalidate=45" } }
+  );
 }

@@ -20,8 +20,8 @@ export function useFeed(): { feed: Feed | null; loading: boolean; error: string 
       }
       return (await res.json()) as Feed;
     },
-    refetchInterval: 8_000,
-    staleTime:       4_000,
+    refetchInterval: 20_000,
+    staleTime:       12_000,
     placeholderData: (prev) => prev,
     retry:           2,
     retryDelay:      1_000,

@@ -54,7 +54,7 @@ export function LiveTicker({ tokens }: { tokens: TokenItem[] }) {
       }
     }
     void load();
-    const id = setInterval(load, 8_000);
+    const id = setInterval(load, 20_000);
     return () => {
       cancelled = true;
       clearInterval(id);

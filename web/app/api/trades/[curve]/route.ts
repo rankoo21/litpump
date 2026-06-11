@@ -12,8 +12,11 @@ export async function GET(
   await ensureFresh();
   const { curve } = await params;
   const limit = Math.min(200, Math.max(1, Number(req.nextUrl.searchParams.get("limit")) || 50));
-  return NextResponse.json({
-    trades: recentTrades(curve, limit),
-    stats:  curveStats24h(curve),
-  });
+  return NextResponse.json(
+    {
+      trades: recentTrades(curve, limit),
+      stats:  curveStats24h(curve),
+    },
+    { headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } }
+  );
 }

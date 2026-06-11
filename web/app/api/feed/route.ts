@@ -11,8 +11,8 @@ export async function GET() {
     const feed = await getFeed();
     return NextResponse.json(feed, {
       headers: {
-        // Allow downstream caches to reuse a single response for short bursts.
-        "Cache-Control": "public, max-age=4, s-maxage=4, stale-while-revalidate=12",
+        // Edge-cache the feed so repeat loads don't re-run the function.
+        "Cache-Control": "public, s-maxage=20, stale-while-revalidate=60",
       },
     });
   } catch (err: any) {
