@@ -22,6 +22,7 @@ import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS } from "@/lib/contracts";
 import { serverRpcUrl } from "@/lib/rpc";
+import { fetchAddressLogs } from "@/lib/explorer";
 
 export type FeedToken = {
   token: Address;
@@ -67,12 +68,16 @@ export type Feed = {
 // Refresh windows.
 const CACHE_TTL_MS    = 10_000;
 const STATIC_TTL_MS   = 5 * 60_000;    // factory token list barely changes
-const SCAN_BLOCK_SPAN = 50_000n;
 // Hard cap on live state fetches per refresh — beyond this we serve a degraded
 // row (zero price, no graduation %). The grid still shows them with metadata.
 const LIVE_LIMIT      = 80;
 const RPC_BATCH       = 24;
-const ADDR_BATCH      = 50;
+// We load metadata for every token so the grid and the "tokens launched"
+// counter reflect the whole factory. This is only the lightweight struct read
+// (no logs), it's paged, and the result is cached for STATIC_TTL_MS, so the
+// heavy walk happens at most once every few minutes. Live curve state (price,
+// volume) is still limited to the newest `LIVE_LIMIT` below.
+const MAX_TOKENS      = 100_000;
 
 let staticList: any[] | null = null;
 let staticAt   = 0;
@@ -83,23 +88,36 @@ let inflight: Promise<Feed> | null = null;
 
 const client = createPublicClient({
   chain: liteForge,
-  transport: http(serverRpcUrl()),
+  transport: http(serverRpcUrl(), { timeout: 30_000 }),
+  // Multicall3 is deployed on LiteForge — batch the per-curve reads into a
+  // handful of aggregate calls instead of one round-trip each.
+  batch: { multicall: { wait: 16, batchSize: 2048 } },
 });
 
 export async function getFeed(): Promise<Feed> {
   const now = Date.now();
-  if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
-  if (inflight)                                return inflight;
 
-  inflight = buildFeed()
-    .then((feed) => {
-      cached    = feed;
-      cachedAt  = Date.now();
-      return feed;
-    })
-    .finally(() => {
-      inflight = null;
-    });
+  // Fresh cache — serve it.
+  if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
+
+  // Kick off a rebuild if one isn't already running.
+  if (!inflight) {
+    inflight = buildFeed()
+      .then((feed) => {
+        cached   = feed;
+        cachedAt = Date.now();
+        return feed;
+      })
+      .finally(() => {
+        inflight = null;
+      });
+  }
+
+  // Stale-while-revalidate: if we have *any* previous snapshot, return it
+  // immediately and let the rebuild finish in the background. Only the very
+  // first request (cold cache) waits for the build. This keeps every response
+  // fast even though a full rebuild takes a while on a big token list.
+  if (cached) return cached;
   return inflight;
 }
 
@@ -110,7 +128,9 @@ async function loadStatic(): Promise<any[]> {
   const out: any[] = [];
   let offset = 0n;
   const PAGE = 200n;
-  while (true) {
+  // listTokens returns newest-first, so we page from offset 0 and stop once we
+  // have MAX_TOKENS — no need to walk the entire (huge) factory list.
+  while (out.length < MAX_TOKENS) {
     const page = (await client.readContract({
       address:      FACTORY_ADDRESS,
       abi:          FACTORY_ABI,
@@ -122,9 +142,9 @@ async function loadStatic(): Promise<any[]> {
     if (BigInt(page.length) < PAGE) break;
     offset += PAGE;
   }
-  staticList = out;
+  staticList = out.slice(0, MAX_TOKENS);
   staticAt   = Date.now();
-  return out;
+  return staticList;
 }
 
 async function buildFeed(): Promise<Feed> {
@@ -145,25 +165,11 @@ async function buildFeed(): Promise<Feed> {
     { address: t.curve, abi: CURVE_ABI, functionName: "migrated"                 } as const,
     { address: t.curve, abi: CURVE_ABI, functionName: "graduationProgressX1e18"  } as const,
   ]);
-  const live: Array<{ result?: any; status: "success" | "failure" }> = [];
-  for (let i = 0; i < liveCalls.length; i += RPC_BATCH) {
-    const slice = liveCalls.slice(i, i + RPC_BATCH);
-    const out   = await Promise.all(
-      slice.map(async (c) => {
-        try {
-          const result = await client.readContract({
-            address:      c.address,
-            abi:          c.abi,
-            functionName: c.functionName,
-          });
-          return { result, status: "success" as const };
-        } catch (err) {
-          return { error: err, result: undefined, status: "failure" as const };
-        }
-      })
-    );
-    live.push(...out);
-  }
+  // One Multicall3 aggregate instead of hundreds of individual round-trips.
+  const live = await client.multicall({
+    contracts: liveCalls as any,
+    allowFailure: true,
+  });
 
   const liveByCurve = new Map<string, {
     priceX1e18: bigint;
@@ -187,38 +193,6 @@ async function buildFeed(): Promise<Feed> {
     });
   }
 
-  // Logs over the live targets only — older tokens have static state anyway.
-  const latest    = await client.getBlockNumber();
-  const fromBlock = latest > SCAN_BLOCK_SPAN ? latest - SCAN_BLOCK_SPAN : 0n;
-  const curveAddrs = liveTargets.map((t) => t.curve as Address);
-  const logs: any[] = [];
-  for (let i = 0; i < curveAddrs.length; i += ADDR_BATCH) {
-    const slice = curveAddrs.slice(i, i + ADDR_BATCH);
-    try {
-      const part = await client.getLogs({ address: slice, fromBlock, toBlock: latest });
-      logs.push(...part);
-    } catch { /* skip batch */ }
-  }
-
-  const uniqueBlocks = Array.from(new Set(logs.map((l) => l.blockNumber!)));
-  const blockTs      = new Map<bigint, number>();
-  for (let i = 0; i < uniqueBlocks.length; i += RPC_BATCH) {
-    const slice = uniqueBlocks.slice(i, i + RPC_BATCH);
-    await Promise.all(
-      slice.map(async (bn) => {
-        try {
-          const b = await client.getBlock({ blockNumber: bn });
-          blockTs.set(bn, Number(b.timestamp));
-        } catch {
-          blockTs.set(bn, 0);
-        }
-      })
-    );
-  }
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  const cutoff = nowSec - 24 * 3600;
-
   type Agg = {
     volume24h:     bigint;
     txCount24h:    number;
@@ -237,26 +211,66 @@ async function buildFeed(): Promise<Feed> {
     });
   }
 
-  for (const log of logs) {
-    let parsed: any;
-    try {
-      parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics });
-    } catch { continue; }
-    if (!parsed || (parsed.eventName !== "Bought" && parsed.eventName !== "Sold")) continue;
+  // 24h volume / price-change per live token, from the Blockscout explorer
+  // (indexed, ~1s each) instead of scanning RPC logs (slow, times out). Fetch
+  // the top tokens in parallel; blocks' timestamps come from the explorer's
+  // paged results are absent, so we resolve them from the RPC in one batch.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const cutoff = nowSec - 24 * 3600;
 
-    const a = agg.get(log.address.toLowerCase());
+  const perToken = await Promise.all(
+    liveTargets.map(async (t) => {
+      try {
+        const raw = await fetchAddressLogs(t.curve as string, { maxPages: 3 });
+        return { curve: (t.curve as string).toLowerCase(), logs: raw };
+      } catch {
+        return { curve: (t.curve as string).toLowerCase(), logs: [] as Awaited<ReturnType<typeof fetchAddressLogs>> };
+      }
+    }),
+  );
+
+  // Resolve timestamps for all referenced blocks in batches.
+  const blockTs = new Map<number, number>();
+  const allBlocks = new Set<number>();
+  for (const { logs } of perToken) for (const l of logs) if (l.blockNumber) allBlocks.add(l.blockNumber);
+  const blockArr = [...allBlocks];
+  for (let i = 0; i < blockArr.length; i += RPC_BATCH) {
+    const slice = blockArr.slice(i, i + RPC_BATCH);
+    await Promise.all(
+      slice.map(async (bn) => {
+        try {
+          const b = await client.getBlock({ blockNumber: BigInt(bn) });
+          blockTs.set(bn, Number(b.timestamp));
+        } catch {
+          blockTs.set(bn, 0);
+        }
+      }),
+    );
+  }
+
+  for (const { curve, logs } of perToken) {
+    const a = agg.get(curve);
     if (!a) continue;
+    // Explorer returns newest-first; walk oldest-first for correct open/close.
+    const ordered = [...logs].reverse();
+    for (const log of ordered) {
+      let parsed: any;
+      try {
+        parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics as any });
+      } catch { continue; }
+      if (!parsed || (parsed.eventName !== "Bought" && parsed.eventName !== "Sold")) continue;
 
-    const ts    = blockTs.get(log.blockNumber!) ?? 0;
-    const price = Number(formatUnits(parsed.args.newPriceX1e18 as bigint, 18));
-    a.lastPrice   = price;
-    a.lastTradeTs = Math.max(a.lastTradeTs, ts);
+      const ts    = blockTs.get(log.blockNumber) ?? 0;
+      const price = Number(formatUnits(parsed.args.newPriceX1e18 as bigint, 18));
+      a.lastPrice   = price;
+      a.lastTradeTs = Math.max(a.lastTradeTs, ts);
 
-    if (ts >= cutoff) {
-      if (a.firstPrice24h === null) a.firstPrice24h = price;
-      const ltc = parsed.eventName === "Bought" ? parsed.args.ltcIn : parsed.args.ltcOut;
-      a.volume24h  += ltc as bigint;
-      a.txCount24h += 1;
+      if (ts >= cutoff) {
+        if (a.firstPrice24h === null) a.firstPrice24h = price;
+        const ltc = parsed.eventName === "Bought" ? parsed.args.ltcIn : parsed.args.ltcOut;
+        a.volume24h  += ltc as bigint;
+        a.txCount24h += 1;
+      }
     }
   }
 
@@ -320,8 +334,8 @@ async function buildFeed(): Promise<Feed> {
       volume24h: totals.volume24h.toString(),
     },
     generatedAt: Date.now(),
-    fromBlock:   fromBlock.toString(),
-    toBlock:     latest.toString(),
+    fromBlock:   "0",
+    toBlock:     "0",
   };
 }
 

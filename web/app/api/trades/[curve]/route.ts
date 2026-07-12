@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recentTrades, curveStats24h, ensureFresh } from "@/lib/server/indexer";
+import { curveTrades, statsFromTrades } from "@/lib/server/indexer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,14 +9,14 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ curve: string }> }
 ) {
-  await ensureFresh();
   const { curve } = await params;
   const limit = Math.min(200, Math.max(1, Number(req.nextUrl.searchParams.get("limit")) || 50));
+  const trades = await curveTrades(curve, limit);
   return NextResponse.json(
     {
-      trades: recentTrades(curve, limit),
-      stats:  curveStats24h(curve),
+      trades,
+      stats: statsFromTrades(trades),
     },
-    { headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } }
+    { headers: { "Cache-Control": "public, s-maxage=20, stale-while-revalidate=60" } }
   );
 }

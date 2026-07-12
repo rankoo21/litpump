@@ -5,12 +5,32 @@ import { liteForge } from "@/lib/chain";
 import { CURVE_ABI, FACTORY_ABI } from "@/lib/abi";
 import { FACTORY_ADDRESS, isFactoryConfigured } from "@/lib/contracts";
 import { serverRpcUrl } from "@/lib/rpc";
+import { fetchAddressLogs, fetchTokenHolders } from "@/lib/explorer";
 
-// Window of recent blocks we replay on every cold-start. Chunked across
-// `SCAN_CHUNK` so we don't hit RPC range limits.
-const SCAN_BLOCK_SPAN = 100_000n;
-const SCAN_CHUNK      = 5_000n;
-const CACHE_TTL_MS    = 30_000;
+// How many of the newest tokens we pull trade history for on each refresh.
+// Trades come from the Blockscout explorer (indexed, ~1s each), so this is
+// bounded parallel work rather than a slow RPC log scan across the chain.
+const TRADE_TOKENS  = 60;
+const CACHE_TTL_MS  = 30_000;
+// Token metadata list barely changes; refresh it less often than trades.
+const TOKENS_TTL_MS = 5 * 60_000;
+// LiteForge block time — used to derive log timestamps by arithmetic from a
+// single chain-head reference, instead of a slow getBlock per block.
+const BLOCK_TIME_SECS = 0.25;
+
+// Cached chain-head reference (block number + timestamp), refreshed briefly.
+let headRef: { block: number; ts: number; at: number } | null = null;
+async function blockRef(): Promise<{ block: number; ts: number } | null> {
+  if (headRef && Date.now() - headRef.at < 15_000) return { block: headRef.block, ts: headRef.ts };
+  try {
+    const bn = await rpc.getBlockNumber();
+    const b  = await rpc.getBlock({ blockNumber: bn });
+    headRef = { block: Number(bn), ts: Number(b.timestamp), at: Date.now() };
+    return { block: headRef.block, ts: headRef.ts };
+  } catch {
+    return headRef ? { block: headRef.block, ts: headRef.ts } : null;
+  }
+}
 
 export type TokenRow = {
   address: Address;
@@ -58,31 +78,20 @@ let cache: Snapshot = emptySnapshot();
 let cachedAt = 0;
 let inflight: Promise<Snapshot> | null = null;
 
+// Token metadata list is cached separately (changes rarely).
+let tokenList: TokenRow[] = [];
+let tokenListAt = 0;
+
 const rpc = createPublicClient({
   chain: liteForge,
-  transport: http(serverRpcUrl()),
+  transport: http(serverRpcUrl(), { timeout: 30_000 }),
 });
 
-const TRANSFER_EVENT = {
-  type: "event",
-  name: "Transfer",
-  inputs: [
-    { name: "from",  type: "address", indexed: true },
-    { name: "to",    type: "address", indexed: true },
-    { name: "value", type: "uint256", indexed: false },
-  ],
-} as const;
-
 /**
- * Make sure the in-memory snapshot is fresh. The first request after a cold
- * start blocks until the snapshot is built; subsequent requests return the
- * cached snapshot immediately and refresh in the background (stale-while-
- * revalidate). This keeps every endpoint snappy even when the cache is past
- * its TTL.
- *
- * Pass `force = true` (used after a user confirms a trade) to bypass the
- * cache TTL and block on a fresh build, so the user sees their own activity
- * the moment the route returns.
+ * Ensure the in-memory snapshot is fresh. First request after a cold start
+ * blocks on the build; later requests get the cached snapshot immediately and
+ * a background refresh runs (stale-while-revalidate). `force` bypasses the TTL
+ * and blocks on a fresh build (used right after a user confirms a trade).
  */
 export async function ensureFresh(force = false): Promise<void> {
   if (!isFactoryConfigured) return;
@@ -93,7 +102,6 @@ export async function ensureFresh(force = false): Promise<void> {
   if (!force && !stale && !empty) return;
 
   if (inflight) {
-    // Always block when forced — the caller wants a guaranteed-fresh snapshot.
     if (force || empty) await inflight;
     return;
   }
@@ -121,164 +129,111 @@ export function startIndexer(): void {
   void ensureFresh();
 }
 
-async function build(): Promise<Snapshot> {
-  const list = (await rpc.readContract({
-    address:      FACTORY_ADDRESS,
-    abi:          FACTORY_ABI,
-    functionName: "listTokens",
-    args:         [0n, 200n],
-  })) as readonly any[];
+/** Load (and cache) the factory's full token list, newest first. */
+async function loadTokens(): Promise<TokenRow[]> {
+  const now = Date.now();
+  if (tokenList.length > 0 && now - tokenListAt < TOKENS_TTL_MS) return tokenList;
 
-  if (!list || list.length === 0) {
+  const raw: any[] = [];
+  let offset = 0n;
+  const PAGE = 200n;
+  while (true) {
+    const page = (await rpc.readContract({
+      address:      FACTORY_ADDRESS,
+      abi:          FACTORY_ABI,
+      functionName: "listTokens",
+      args:         [offset, PAGE],
+    })) as readonly any[];
+    if (!page || page.length === 0) break;
+    raw.push(...page);
+    if (BigInt(page.length) < PAGE) break;
+    offset += PAGE;
+  }
+
+  const rows: TokenRow[] = raw.map((t) => ({
+    address:     ((t.token as string).toLowerCase()) as Address,
+    curve:       ((t.curve as string).toLowerCase()) as Address,
+    creator:     ((t.creator as string).toLowerCase()) as Address,
+    name:        String(t.name ?? ""),
+    symbol:      String(t.symbol ?? ""),
+    imageURI:    String(t.imageURI ?? ""),
+    description: String(t.description ?? ""),
+    twitter:     String(t.twitter ?? ""),
+    telegram:    String(t.telegram ?? ""),
+    website:     String(t.website ?? ""),
+    createdAt:   Number(t.createdAt ?? 0),
+    blockNumber: 0,
+  }));
+  // listTokens already returns newest-first; sort defensively.
+  rows.sort((a, b) => b.createdAt - a.createdAt);
+
+  tokenList   = rows;
+  tokenListAt = Date.now();
+  return rows;
+}
+
+async function build(): Promise<Snapshot> {
+  const tokens = await loadTokens();
+  if (tokens.length === 0) {
     // eslint-disable-next-line no-console
     console.log("[indexer] build: no tokens registered");
     return emptySnapshot();
   }
 
-  const latest    = await rpc.getBlockNumber();
-  const fromBlock = latest > SCAN_BLOCK_SPAN ? latest - SCAN_BLOCK_SPAN : 0n;
-
-  const curveAddrs = list.map((t) => t.curve as Address);
-  const tokenAddrs = list.map((t) => t.token as Address);
-
-  // Chunk a wide block range into RPC-friendly windows.
-  const ranges: { from: bigint; to: bigint }[] = [];
-  for (let f = fromBlock; f <= latest; f += SCAN_CHUNK) {
-    const to = f + SCAN_CHUNK - 1n > latest ? latest : f + SCAN_CHUNK - 1n;
-    ranges.push({ from: f, to });
-  }
-
-  async function getLogsAcross(args: { address: Address | Address[]; event?: any }) {
-    // Run chunks in parallel — at 5k blocks per chunk × 20 chunks this is
-    // tolerable. We log on hard failures so Vercel function logs surface them.
-    const results = await Promise.all(
-      ranges.map((r) =>
-        rpc
-          .getLogs({
-            address:   args.address as any,
-            event:     args.event,
-            fromBlock: r.from,
-            toBlock:   r.to,
-          })
-          .catch((err) => {
-            // eslint-disable-next-line no-console
-            console.warn("[indexer] getLogs chunk", r.from.toString(), "→", r.to.toString(), "failed:", err?.message ?? err);
-            return [] as any[];
-          })
-      )
-    );
-    return results.flat();
-  }
-
-  // 1) Factory `TokenLaunched` logs — used to look up the on-chain creation block/timestamp.
-  // 2) Curve trade events.
-  // 3) Token Transfer events for holder reconstruction. We pull all token logs
-  //    without an event filter — some RPCs reject the topic+address combo or
-  //    silently truncate it. Decoding is filtered locally by the Transfer ABI.
-  const factoryLogs  = await getLogsAcross({ address: FACTORY_ADDRESS });
-  const tradeLogs    = await getLogsAcross({ address: curveAddrs });
-  const transferLogs = await getLogsAcross({ address: tokenAddrs });
-
-  // Resolve unique block timestamps. Sequential to avoid rate-limits.
-  const blockNums = new Set<bigint>();
-  for (const l of factoryLogs) if (l.blockNumber) blockNums.add(l.blockNumber);
-  for (const l of tradeLogs)   if (l.blockNumber) blockNums.add(l.blockNumber);
-  const blockTs = new Map<bigint, number>();
-  // Batch in groups of 8 — small enough to not hammer the RPC, large enough to be quick.
-  const blockArr = [...blockNums];
-  for (let i = 0; i < blockArr.length; i += 8) {
-    const slice = blockArr.slice(i, i + 8);
-    await Promise.all(
-      slice.map(async (bn) => {
-        try {
-          const b = await rpc.getBlock({ blockNumber: bn });
-          blockTs.set(bn, Number(b.timestamp));
-        } catch {
-          blockTs.set(bn, 0);
-        }
-      })
-    );
-  }
-
-  // Map curve -> launch metadata.
-  const launchByCurve = new Map<string, { ts: number; block: number }>();
-  for (const log of factoryLogs) {
-    try {
-      const parsed = decodeEventLog({ abi: FACTORY_ABI, data: log.data, topics: log.topics });
-      if (parsed.eventName !== "TokenLaunched") continue;
-      const a = parsed.args as any;
-      launchByCurve.set((a.curve as string).toLowerCase(), {
-        ts:    blockTs.get(log.blockNumber!) ?? 0,
-        block: Number(log.blockNumber!),
-      });
-    } catch { /* not our event */ }
-  }
-
-  // Compose TokenRow[].
-  const tokens: TokenRow[] = list.map((t) => {
-    const meta = launchByCurve.get((t.curve as string).toLowerCase());
-    return {
-      address:     ((t.token as string).toLowerCase()) as Address,
-      curve:       ((t.curve as string).toLowerCase()) as Address,
-      creator:     ((t.creator as string).toLowerCase()) as Address,
-      name:        String(t.name ?? ""),
-      symbol:      String(t.symbol ?? ""),
-      imageURI:    String(t.imageURI ?? ""),
-      description: String(t.description ?? ""),
-      twitter:     String(t.twitter ?? ""),
-      telegram:    String(t.telegram ?? ""),
-      website:     String(t.website ?? ""),
-      createdAt:   meta?.ts ?? Number(t.createdAt ?? 0),
-      blockNumber: meta?.block ?? 0,
-    };
-  });
-  tokens.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Curve -> token meta lookup for trade decoding.
   const curveToToken = new Map<string, { token: Address; symbol: string; image: string }>();
   for (const tk of tokens) {
-    curveToToken.set(tk.curve.toLowerCase(), {
-      token:  tk.address,
-      symbol: tk.symbol,
-      image:  tk.imageURI,
-    });
+    curveToToken.set(tk.curve, { token: tk.address, symbol: tk.symbol, image: tk.imageURI });
   }
 
-  // Compose TradeRow[].
+  // Pull trade logs for the newest tokens from the explorer, in parallel.
+  const targets = tokens.slice(0, TRADE_TOKENS);
+  const logsByCurve = await Promise.all(
+    targets.map(async (tk) => {
+      try {
+        const logs = await fetchAddressLogs(tk.curve, { maxPages: 3 });
+        return { curve: tk.curve, logs };
+      } catch {
+        return { curve: tk.curve, logs: [] as Awaited<ReturnType<typeof fetchAddressLogs>> };
+      }
+    }),
+  );
+
+  // Derive timestamps from the chain head + block time (one read, arithmetic).
+  const ref = await blockRef();
+  const tsFor = (bn: number) => (ref ? ref.ts - Math.round((ref.block - bn) * BLOCK_TIME_SECS) : 0);
+
   const trades: TradeRow[] = [];
-  for (const log of tradeLogs) {
-    let parsed:
-      | { eventName: string; args: any }
-      | undefined;
-    try {
-      parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics }) as any;
-    } catch { continue; }
-    if (!parsed) continue;
-    if (parsed.eventName !== "Bought" && parsed.eventName !== "Sold") continue;
-
-    const meta = curveToToken.get(log.address.toLowerCase());
+  for (const { curve, logs } of logsByCurve) {
+    const meta = curveToToken.get(curve);
     if (!meta) continue;
+    for (const log of logs) {
+      let parsed: { eventName: string; args: any } | undefined;
+      try {
+        parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics as any }) as any;
+      } catch { continue; }
+      if (!parsed) continue;
+      if (parsed.eventName !== "Bought" && parsed.eventName !== "Sold") continue;
 
-    const a     = parsed.args as any;
-    const isBuy = parsed.eventName === "Bought";
-
-    trades.push({
-      curve:        log.address.toLowerCase() as Address,
-      token:        meta.token,
-      symbol:       meta.symbol,
-      imageURI:     meta.image,
-      kind:         isBuy ? "buy" : "sell",
-      who:          ((isBuy ? a.buyer : a.seller) as string).toLowerCase() as Address,
-      ltc:          ((isBuy ? a.ltcIn  : a.ltcOut) as bigint).toString(),
-      tokens:       ((isBuy ? a.tokensOut : a.tokensIn) as bigint).toString(),
-      priceX1e18:   (a.newPriceX1e18 as bigint).toString(),
-      ltcCollected: (a.ltcCollected as bigint).toString(),
-      tokensSold:   (a.tokensSold as bigint).toString(),
-      ts:           blockTs.get(log.blockNumber!) ?? 0,
-      blockNumber:  Number(log.blockNumber!),
-      txHash:       log.transactionHash as `0x${string}`,
-      logIndex:     log.logIndex ?? 0,
-    });
+      const a     = parsed.args as any;
+      const isBuy = parsed.eventName === "Bought";
+      trades.push({
+        curve:        curve as Address,
+        token:        meta.token,
+        symbol:       meta.symbol,
+        imageURI:     meta.image,
+        kind:         isBuy ? "buy" : "sell",
+        who:          ((isBuy ? a.buyer : a.seller) as string).toLowerCase() as Address,
+        ltc:          ((isBuy ? a.ltcIn  : a.ltcOut) as bigint).toString(),
+        tokens:       ((isBuy ? a.tokensOut : a.tokensIn) as bigint).toString(),
+        priceX1e18:   (a.newPriceX1e18 as bigint).toString(),
+        ltcCollected: (a.ltcCollected as bigint).toString(),
+        tokensSold:   (a.tokensSold as bigint).toString(),
+        ts:           tsFor(log.blockNumber),
+        blockNumber:  log.blockNumber,
+        txHash:       log.transactionHash,
+        logIndex:     log.logIndex,
+      });
+    }
   }
   trades.sort((a, b) => {
     if (b.ts !== a.ts) return b.ts - a.ts;
@@ -286,104 +241,17 @@ async function build(): Promise<Snapshot> {
     return b.logIndex - a.logIndex;
   });
 
-  // Reconstruct holder balances from Transfer events. Mints come from the
-  // zero address; burns go to it. We skip both endpoints in the final list.
-  // Some RPCs truncate Transfer logs over wide ranges, so we fall back to a
-  // direct `balanceOf` read for any address that appears in a trade or
-  // transfer that ended up in our window.
-  const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-  const candidatesByToken = new Map<string, Set<string>>();
-  function addCandidate(token: string, who: string) {
-    if (who === "0x0000000000000000000000000000000000000000") return;
-    let s = candidatesByToken.get(token);
-    if (!s) { s = new Set(); candidatesByToken.set(token, s); }
-    s.add(who);
-  }
-
-  for (const log of transferLogs) {
-    if (!log.topics || log.topics[0] !== TRANSFER_TOPIC) continue;
-    let parsed: { args: any } | undefined;
-    try {
-      parsed = decodeEventLog({ abi: [TRANSFER_EVENT], data: log.data, topics: log.topics }) as any;
-    } catch { continue; }
-    if (!parsed) continue;
-
-    const a     = parsed.args as any;
-    const token = (log.address as string).toLowerCase();
-    addCandidate(token, (a.from as string).toLowerCase());
-    addCandidate(token, (a.to   as string).toLowerCase());
-  }
-  // Also seed candidates from trade events so we still see holders even when
-  // Transfer logs were partially truncated by the RPC.
-  for (const t of trades) {
-    addCandidate(t.token, t.who);
-  }
-  // Seed each token's curve address too — the curve always holds the unsold supply.
-  for (const tk of tokens) {
-    addCandidate(tk.address.toLowerCase(), tk.curve.toLowerCase());
-  }
-
-  const balanceOfAbi = [{
-    type: "function",
-    name: "balanceOf",
-    stateMutability: "view",
-    inputs:  [{ name: "owner", type: "address" }],
-    outputs: [{ name: "",      type: "uint256" }],
-  }] as const;
-
-  const holdersByToken = new Map<string, HolderRow[]>();
-  for (const [token, who] of candidatesByToken) {
-    const rows: HolderRow[] = [];
-    const arr = [...who];
-    // Read balances in groups of 8 to avoid hammering the RPC.
-    for (let i = 0; i < arr.length; i += 8) {
-      const slice = arr.slice(i, i + 8);
-      const bals = await Promise.all(
-        slice.map(async (addr) => {
-          try {
-            const b = (await rpc.readContract({
-              address:      token as Address,
-              abi:          balanceOfAbi,
-              functionName: "balanceOf",
-              args:         [addr as Address],
-            })) as bigint;
-            return { addr, b };
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn(`[indexer] balanceOf ${token} ${addr} failed:`, (err as Error)?.message);
-            return { addr, b: 0n };
-          }
-        })
-      );
-      for (const { addr, b } of bals) {
-        if (b > 0n) rows.push({ address: addr as Address, balance: b.toString() });
-      }
-    }
-    rows.sort((a, b) => {
-      const av = BigInt(a.balance);
-      const bv = BigInt(b.balance);
-      if (av === bv) return 0;
-      return av > bv ? -1 : 1;
-    });
-    // eslint-disable-next-line no-console
-    console.log(`[indexer] holders ${token}: candidates=${arr.length} positive=${rows.length}`);
-    holdersByToken.set(token, rows);
-  }
-
   // eslint-disable-next-line no-console
-  console.log(
-    `[indexer] build done: tokens=${tokens.length} trades=${trades.length} ` +
-    `transferLogs=${transferLogs.length} holdersTokens=${holdersByToken.size} ` +
-    `fromBlock=${fromBlock.toString()} latest=${latest.toString()}`
-  );
-  return { tokens, trades, holdersByToken, generatedAt: Date.now() };
+  console.log(`[indexer] build done: tokens=${tokens.length} tradeTokens=${targets.length} trades=${trades.length}`);
+  // Holders are fetched on demand (see topHolders) — no per-build work.
+  return { tokens, trades, holdersByToken: new Map(), generatedAt: Date.now() };
 }
 
 function emptySnapshot(): Snapshot {
   return { tokens: [], trades: [], holdersByToken: new Map(), generatedAt: 0 };
 }
 
-// ---- Query helpers (sync, read from `cache`). All routes call ensureFresh() first.
+// ---- Query helpers. All routes call ensureFresh() first for trades/tokens.
 
 export function listTokens(limit = 100, offset = 0): TokenRow[] {
   return cache.tokens.slice(offset, offset + limit);
@@ -448,7 +316,6 @@ export function curveStats24h(curve: string): { volume24h: string; txCount24h: n
   let firstPrice = 0;
   let lastPrice  = 0;
 
-  // cache.trades is sorted newest first.
   const filtered = cache.trades.filter((t) => t.curve.toLowerCase() === c);
   for (let i = 0; i < filtered.length; i++) {
     const t = filtered[i];
@@ -456,12 +323,116 @@ export function curveStats24h(curve: string): { volume24h: string; txCount24h: n
     vol += BigInt(t.ltc);
     n   += 1;
     if (i === 0) lastPrice = Number(BigInt(t.priceX1e18)) / 1e18;
-    firstPrice = Number(BigInt(t.priceX1e18)) / 1e18; // overwritten until last in-window
+    firstPrice = Number(BigInt(t.priceX1e18)) / 1e18;
   }
   const priceChange = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
   return { volume24h: vol.toString(), txCount24h: n, priceChange24h: priceChange };
 }
 
-export function topHolders(token: string, limit = 12): HolderRow[] {
-  return (cache.holdersByToken.get(token.toLowerCase()) ?? []).slice(0, limit);
+// Per-curve trade history from the explorer, cached briefly. Used by the token
+// detail route so a curve that isn't in the newest-tokens snapshot still gets
+// its full trade history (and chart/stats), not an empty list.
+const curveTradeCache = new Map<string, { trades: TradeRow[]; at: number }>();
+const CURVE_TRADES_TTL_MS = 20_000;
+
+export async function curveTrades(curve: string, limit = 200): Promise<TradeRow[]> {
+  const key = curve.toLowerCase();
+  const hit = curveTradeCache.get(key);
+  if (hit && Date.now() - hit.at < CURVE_TRADES_TTL_MS) return hit.trades.slice(0, limit);
+
+  try {
+    // Only use the token list if it's already cached — don't trigger a full
+    // (thousands of tokens) reload just to label one curve's trades.
+    const meta =
+      tokenList.length > 0 ? tokenList.find((t) => t.curve === key) : undefined;
+    const logs = await fetchAddressLogs(key, { maxPages: 5 });
+
+    // Derive block timestamps from the chain head + ~0.25s block time instead
+    // of one getBlock per block (which is slow on this RPC). One reference
+    // read, then arithmetic — plenty accurate for candles and 24h windows.
+    const ref = await blockRef();
+    const tsFor = (bn: number) => (ref ? ref.ts - Math.round((ref.block - bn) * BLOCK_TIME_SECS) : 0);
+
+    const out: TradeRow[] = [];
+    for (const log of logs) {
+      let parsed: { eventName: string; args: any } | undefined;
+      try {
+        parsed = decodeEventLog({ abi: CURVE_ABI, data: log.data, topics: log.topics as any }) as any;
+      } catch { continue; }
+      if (!parsed) continue;
+      if (parsed.eventName !== "Bought" && parsed.eventName !== "Sold") continue;
+
+      const a     = parsed.args as any;
+      const isBuy = parsed.eventName === "Bought";
+      out.push({
+        curve:        key as Address,
+        token:        (meta?.address ?? ("0x" as Address)),
+        symbol:       meta?.symbol ?? "",
+        imageURI:     meta?.imageURI ?? "",
+        kind:         isBuy ? "buy" : "sell",
+        who:          ((isBuy ? a.buyer : a.seller) as string).toLowerCase() as Address,
+        ltc:          ((isBuy ? a.ltcIn  : a.ltcOut) as bigint).toString(),
+        tokens:       ((isBuy ? a.tokensOut : a.tokensIn) as bigint).toString(),
+        priceX1e18:   (a.newPriceX1e18 as bigint).toString(),
+        ltcCollected: (a.ltcCollected as bigint).toString(),
+        tokensSold:   (a.tokensSold as bigint).toString(),
+        ts:           tsFor(log.blockNumber),
+        blockNumber:  log.blockNumber,
+        txHash:       log.transactionHash,
+        logIndex:     log.logIndex,
+      });
+    }
+    out.sort((a, b) => {
+      if (b.ts !== a.ts) return b.ts - a.ts;
+      if (b.blockNumber !== a.blockNumber) return b.blockNumber - a.blockNumber;
+      return b.logIndex - a.logIndex;
+    });
+
+    curveTradeCache.set(key, { trades: out, at: Date.now() });
+    return out.slice(0, limit);
+  } catch {
+    return hit ? hit.trades.slice(0, limit) : [];
+  }
+}
+
+/** 24h stats computed from a curve's explorer trade history. */
+export function statsFromTrades(trades: TradeRow[]): { volume24h: string; txCount24h: number; priceChange24h: number } {
+  const cutoff = Math.floor(Date.now() / 1000) - 86_400;
+  let vol = 0n;
+  let n = 0;
+  let firstPrice = 0;
+  let lastPrice = 0;
+  // trades sorted newest-first.
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    if (t.ts < cutoff) break;
+    vol += BigInt(t.ltc);
+    n += 1;
+    if (i === 0) lastPrice = Number(BigInt(t.priceX1e18)) / 1e18;
+    firstPrice = Number(BigInt(t.priceX1e18)) / 1e18;
+  }
+  const priceChange = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
+  return { volume24h: vol.toString(), txCount24h: n, priceChange24h: priceChange };
+}
+
+// Holders come straight from the explorer's indexed balances, cached briefly
+// per token so repeated polls don't refetch.
+const holderCache = new Map<string, { rows: HolderRow[]; at: number }>();
+const HOLDER_TTL_MS = 30_000;
+
+export async function topHolders(token: string, limit = 12): Promise<HolderRow[]> {
+  const key = token.toLowerCase();
+  const hit = holderCache.get(key);
+  if (hit && Date.now() - hit.at < HOLDER_TTL_MS) return hit.rows.slice(0, limit);
+
+  try {
+    const rows = (await fetchTokenHolders(key, { limit: 50 })).map((h) => ({
+      address: h.address as Address,
+      balance: h.balance,
+    }));
+    holderCache.set(key, { rows, at: Date.now() });
+    return rows.slice(0, limit);
+  } catch {
+    return hit ? hit.rows.slice(0, limit) : [];
+  }
 }

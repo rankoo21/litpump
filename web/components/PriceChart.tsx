@@ -52,7 +52,7 @@ type ChartV4 = IChartApi & {
   addHistogramSeries:   (opts?: any) => ISeriesApi<"Histogram">;
 };
 
-export function PriceChart({ curve, symbol, token }: { curve: Address; symbol?: string; token?: Address }) {
+export function PriceChart({ curve, symbol, token, createdAt }: { curve: Address; symbol?: string; token?: Address; createdAt?: number }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const chartRef   = useRef<HTMLDivElement>(null);
   const apiRef     = useRef<ChartV4 | null>(null);
@@ -63,7 +63,7 @@ export function PriceChart({ curve, symbol, token }: { curve: Address; symbol?: 
 
   const { data, isLoading } = useTrades(curve, 200);
   // Direct RPC fallback to avoid the "empty chart" gap during cold-starts.
-  const direct = useDirectTrades(curve, token ?? "0x", symbol ?? "");
+  const direct = useDirectTrades(curve, token ?? "0x", symbol ?? "", createdAt);
   const trades = mergeTrades(data?.trades, direct ?? undefined);
 
   const { data: currentPrice } = useReadContract({

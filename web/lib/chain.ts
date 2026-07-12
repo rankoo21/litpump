@@ -26,5 +26,11 @@ export const liteForge = defineChain({
       url: "https://liteforge.explorer.caldera.xyz",
     },
   },
+  contracts: {
+    // Canonical Multicall3 (same address on every chain it's deployed to).
+    // Lets viem batch hundreds of reads into a single aggregate eth_call
+    // instead of one round-trip each.
+    multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" },
+  },
   testnet: true,
 });

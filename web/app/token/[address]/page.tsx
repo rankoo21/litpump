@@ -200,9 +200,9 @@ export default function TokenPage() {
           </div>
         </div>
 
-        <PriceChart curve={t.curve} symbol={t.symbol} token={t.token} />
+        <PriceChart curve={t.curve} symbol={t.symbol} token={t.token} createdAt={Number(t.createdAt ?? 0n)} />
 
-        <TradesTable curve={t.curve} symbol={t.symbol} token={t.token} />
+        <TradesTable curve={t.curve} symbol={t.symbol} token={t.token} createdAt={Number(t.createdAt ?? 0n)} />
 
         <TokenComments token={t.token} />
       </div>
@@ -265,11 +265,11 @@ type Trade = {
   tx: `0x${string}`;
 };
 
-function TradesTable({ curve, symbol, token }: { curve: Address; symbol: string; token: Address }) {
+function TradesTable({ curve, symbol, token, createdAt }: { curve: Address; symbol: string; token: Address; createdAt?: number }) {
   const { data } = useTrades(curve, 200);
   // Direct RPC scan as a fallback for cold-starts — gives users data in
   // ~1-2s instead of waiting for the indexer's first build (5-7s).
-  const direct = useDirectTrades(curve, token, symbol);
+  const direct = useDirectTrades(curve, token, symbol, createdAt);
 
   // Merge both sources by tx+logIndex so the table never flashes "fewer
   // trades" when one source briefly lags the other.

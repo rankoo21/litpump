@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { topHolders, ensureFresh } from "@/lib/server/indexer";
+import { topHolders } from "@/lib/server/indexer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,11 +9,11 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> }
 ) {
-  await ensureFresh();
   const { token } = await params;
   const limit = Math.min(50, Math.max(1, Number(req.nextUrl.searchParams.get("limit")) || 12));
+  const holders = await topHolders(token, limit);
   return NextResponse.json(
-    { holders: topHolders(token, limit) },
-    { headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=30" } }
+    { holders },
+    { headers: { "Cache-Control": "public, s-maxage=30, stale-while-revalidate=90" } }
   );
 }
