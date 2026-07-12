@@ -72,12 +72,12 @@ const STATIC_TTL_MS   = 5 * 60_000;    // factory token list barely changes
 // row (zero price, no graduation %). The grid still shows them with metadata.
 const LIVE_LIMIT      = 80;
 const RPC_BATCH       = 24;
-// We load metadata for every token so the grid and the "tokens launched"
-// counter reflect the whole factory. This is only the lightweight struct read
-// (no logs), it's paged, and the result is cached for STATIC_TTL_MS, so the
-// heavy walk happens at most once every few minutes. Live curve state (price,
-// volume) is still limited to the newest `LIVE_LIMIT` below.
-const MAX_TOKENS      = 100_000;
+// Metadata for the grid is capped at the newest `MAX_TOKENS` — loading the
+// full factory (thousands) as paged struct reads was slow and occasionally
+// timed out one of the pages, failing the whole feed. The true total shown in
+// the "tokens launched" counter comes from `tokensCount()` (one cheap read),
+// so the number stays accurate even though the grid holds the newest slice.
+const MAX_TOKENS      = 600;
 
 let staticList: any[] | null = null;
 let staticAt   = 0;
@@ -127,7 +127,9 @@ async function loadStatic(): Promise<any[]> {
 
   const out: any[] = [];
   let offset = 0n;
-  const PAGE = 200n;
+  // Smaller pages keep each eth_call well under the RPC's per-request time
+  // limit (a 200-item page of full metadata structs occasionally timed out).
+  const PAGE = 100n;
   // listTokens returns newest-first, so we page from offset 0 and stop once we
   // have MAX_TOKENS — no need to walk the entire (huge) factory list.
   while (out.length < MAX_TOKENS) {
@@ -150,6 +152,18 @@ async function loadStatic(): Promise<any[]> {
 async function buildFeed(): Promise<Feed> {
   const list = await loadStatic();
   if (list.length === 0) return emptyFeed();
+
+  // True token count for the counter (one cheap read). Falls back to the
+  // loaded slice length if the call fails.
+  let totalCount = list.length;
+  try {
+    const c = (await client.readContract({
+      address:      FACTORY_ADDRESS,
+      abi:          FACTORY_ABI,
+      functionName: "tokensCount",
+    })) as bigint;
+    if (c && Number(c) > 0) totalCount = Number(c);
+  } catch { /* keep fallback */ }
 
   // Sort newest first so live state goes to the tokens users actually see.
   const sorted = [...list].sort((a, b) => Number(b.createdAt) - Number(a.createdAt));
@@ -327,7 +341,7 @@ async function buildFeed(): Promise<Feed> {
   return {
     tokens,
     totals: {
-      tokens:    totals.tokens,
+      tokens:    totalCount,
       graduated: totals.graduated,
       marketCap: totals.marketCap.toString(),
       raised:    totals.raised.toString(),
