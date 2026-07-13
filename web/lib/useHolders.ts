@@ -27,8 +27,9 @@ export function useHolders(token: Address | string | undefined, limit = 12) {
       }
       return data;
     },
-    refetchInterval:        20_000,
-    staleTime:               12_000,
+    refetchInterval:             45_000,
+    refetchIntervalInBackground: false,
+    staleTime:                   40_000,
     placeholderData:         (prev) => prev,
     retry:                    2,
     retryDelay:               1_500,

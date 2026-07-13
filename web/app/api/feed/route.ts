@@ -11,8 +11,10 @@ export async function GET() {
     const feed = await getFeed();
     return NextResponse.json(feed, {
       headers: {
-        // Edge-cache the feed so repeat loads don't re-run the function.
-        "Cache-Control": "public, s-maxage=20, stale-while-revalidate=60",
+        // Shared edge cache: every visitor is served the same cached feed for
+        // the window, so the function runs a couple of times a minute at most
+        // regardless of traffic. This is the main lever against CPU overage.
+        "Cache-Control": "public, s-maxage=45, stale-while-revalidate=120",
       },
     });
   } catch (err: any) {

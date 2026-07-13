@@ -100,14 +100,19 @@ export async function getFeed(): Promise<Feed> {
   // Fresh cache — serve it.
   if (cached && now - cachedAt < CACHE_TTL_MS) return cached;
 
-  // Kick off a rebuild if one isn't already running.
+  // Kick off a rebuild if one isn't already running. On failure keep the old
+  // snapshot instead of rejecting — a transient RPC timeout must never blank
+  // the home page.
   if (!inflight) {
     inflight = buildFeed()
       .then((feed) => {
+        // Ignore an empty rebuild if we already have real data cached.
+        if (feed.tokens.length === 0 && cached && cached.tokens.length > 0) return cached;
         cached   = feed;
         cachedAt = Date.now();
         return feed;
       })
+      .catch(() => cached ?? emptyFeed())
       .finally(() => {
         inflight = null;
       });
@@ -115,8 +120,7 @@ export async function getFeed(): Promise<Feed> {
 
   // Stale-while-revalidate: if we have *any* previous snapshot, return it
   // immediately and let the rebuild finish in the background. Only the very
-  // first request (cold cache) waits for the build. This keeps every response
-  // fast even though a full rebuild takes a while on a big token list.
+  // first request (cold cache) waits for the build.
   if (cached) return cached;
   return inflight;
 }
@@ -127,23 +131,39 @@ async function loadStatic(): Promise<any[]> {
 
   const out: any[] = [];
   let offset = 0n;
-  // Smaller pages keep each eth_call well under the RPC's per-request time
-  // limit (a 200-item page of full metadata structs occasionally timed out).
   const PAGE = 100n;
+
+  // Read one page with a short retry, tolerating failure. A single slow page
+  // must NOT fail the whole feed (that's what produced "Couldn't load tokens"):
+  // we keep whatever pages succeeded and move on.
+  async function readPage(off: bigint): Promise<readonly any[] | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return (await client.readContract({
+          address:      FACTORY_ADDRESS,
+          abi:          FACTORY_ABI,
+          functionName: "listTokens",
+          args:         [off, PAGE],
+        })) as readonly any[];
+      } catch {
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    return null;
+  }
+
   // listTokens returns newest-first, so we page from offset 0 and stop once we
-  // have MAX_TOKENS — no need to walk the entire (huge) factory list.
+  // have MAX_TOKENS. If a page fails after its retry, stop paging and serve
+  // what we have rather than erroring out.
   while (out.length < MAX_TOKENS) {
-    const page = (await client.readContract({
-      address:      FACTORY_ADDRESS,
-      abi:          FACTORY_ABI,
-      functionName: "listTokens",
-      args:         [offset, PAGE],
-    })) as readonly any[];
-    if (!page || page.length === 0) break;
+    const page = await readPage(offset);
+    if (page === null) break;
+    if (page.length === 0) break;
     out.push(...page);
     if (BigInt(page.length) < PAGE) break;
     offset += PAGE;
   }
+
   staticList = out.slice(0, MAX_TOKENS);
   staticAt   = Date.now();
   return staticList;

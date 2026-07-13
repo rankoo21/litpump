@@ -88,8 +88,9 @@ export function useTrades(curve: Address | string | undefined, limit = 200) {
     },
     // Poll at a relaxed interval to keep serverless usage low. The WebSocket
     // push (useLiveTrades) covers real-time so this is just a safety net.
-    refetchInterval:    15_000,
-    staleTime:          10_000,
+    refetchInterval:             30_000,
+    refetchIntervalInBackground: false,
+    staleTime:                   25_000,
     // Keep data fresh forever in the cache so navigating back to a token
     // doesn't show "No trades yet" while the next poll is in flight.
     gcTime:             5 * 60 * 1000,

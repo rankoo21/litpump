@@ -83,7 +83,8 @@ export default function TokenPage() {
           { address: t.curve, abi: CURVE_ABI, functionName: "lpPair" },
         ]
       : [],
-    query: { enabled: !!t, refetchInterval: 5_000 },
+    // One multicall (batched) every 10s, and not while the tab is hidden.
+    query: { enabled: !!t, refetchInterval: 10_000, refetchIntervalInBackground: false },
   });
 
   if (!t) {

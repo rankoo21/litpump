@@ -70,7 +70,7 @@ export function PriceChart({ curve, symbol, token, createdAt }: { curve: Address
     address: curve,
     abi: CURVE_ABI,
     functionName: "currentPriceX1e18",
-    query: { refetchInterval: 5_000 },
+    query: { refetchInterval: 10_000, refetchIntervalInBackground: false },
   });
 
   // Build chart once.

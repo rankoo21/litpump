@@ -64,8 +64,9 @@ export function useUserTransactions(user: Address | undefined): { items: UserTx[
       ].sort((a, b) => b.ts - a.ts).slice(0, 100);
       return { items };
     },
-    refetchInterval:  20_000,
-    staleTime:        12_000,
+    refetchInterval:             45_000,
+    refetchIntervalInBackground: false,
+    staleTime:                   40_000,
     placeholderData:  (prev) => prev,
   });
 

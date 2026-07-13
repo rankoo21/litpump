@@ -32,17 +32,12 @@ export const wagmiConfig = createConfig({
   chains: [liteForge],
   connectors,
   transports: {
-    // LitVM LiteForge has no Multicall3 deployment, so we disable wagmi's
-    // automatic batching. Each `useReadContract` becomes one `eth_call` —
-    // slightly more RPC traffic, but correctness over micro-optimisation.
-    [liteForge.id]: http(liteForge.rpcUrls.default.http[0], {
-      batch: false,
-    }),
+    // LiteForge DOES have Multicall3 (0xcA11...CA11, declared in chain.ts), so
+    // let wagmi batch multiple eth_calls made in the same tick into a single
+    // aggregate request. Fewer round-trips = faster pages + far less RPC load.
+    [liteForge.id]: http(liteForge.rpcUrls.default.http[0]),
   },
-  // Disable multicall batching across the whole config too: a few hooks
-  // (`useReadContracts`, balance polling) reach for it independently of the
-  // transport setting.
-  batch: { multicall: false },
+  batch: { multicall: true },
   // Cookie-backed storage so SSR doesn't crash trying to reach indexedDB.
   storage: createStorage({ storage: cookieStorage }),
   ssr: true,

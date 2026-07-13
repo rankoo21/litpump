@@ -54,7 +54,11 @@ export function LiveTicker({ tokens }: { tokens: TokenItem[] }) {
       }
     }
     void load();
-    const id = setInterval(load, 20_000);
+    // Decorative ticker — poll slowly and skip while the tab is hidden.
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void load();
+    }, 45_000);
     return () => {
       cancelled = true;
       clearInterval(id);

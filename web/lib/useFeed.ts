@@ -20,10 +20,13 @@ export function useFeed(): { feed: Feed | null; loading: boolean; error: string 
       }
       return (await res.json()) as Feed;
     },
-    refetchInterval: 20_000,
-    staleTime:       12_000,
+    // Poll slowly, and never in a hidden/background tab — that's the biggest
+    // avoidable serverless-CPU sink (tabs left open polling forever).
+    refetchInterval:             45_000,
+    refetchIntervalInBackground: false,
+    staleTime:                   40_000,
     placeholderData: (prev) => prev,
-    retry:           2,
+    retry:           1,
     retryDelay:      1_000,
   });
   return {
