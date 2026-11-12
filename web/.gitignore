@@ -26,3 +26,6 @@ holders.json
 logs.txt
 
 .vercel
+.open-next
+.wrangler
+.dev.vars

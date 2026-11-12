@@ -1,0 +1,7 @@
+# Cloudflare Worker secrets. Copy this file to .dev.vars for local Workers tests.
+# Never commit the real values.
+PRIVATE_RPC_URL=
+PINATA_JWT=
+PINATA_JWT_2=
+PINATA_JWT_3=
+PINATA_JWT_4=

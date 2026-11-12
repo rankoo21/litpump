@@ -10,7 +10,10 @@
     "build": "cross-env NODE_OPTIONS=\"--max-old-space-size=8192\" next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare build && wrangler dev",
+    "cf:deploy": "opennextjs-cloudflare build && wrangler deploy"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "2.1.6",
@@ -28,6 +31,7 @@
     "wagmi": "2.12.17"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.18.0",
     "@types/node": "20.16.5",
     "@types/react": "18.3.10",
     "@types/react-dom": "18.3.0",
@@ -35,7 +39,8 @@
     "cross-env": "^10.1.0",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.13",
-    "typescript": "5.6.2"
+    "typescript": "5.6.2",
+    "wrangler": "^4.65.0"
   },
   "overrides": {
     "postcss": "8.5.10",
