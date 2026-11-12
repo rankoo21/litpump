@@ -23,6 +23,21 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
+  // These are public LiteForge testnet contract addresses. Keeping the
+  // deployment defaults here prevents a fresh host from rendering an empty
+  // factory while still allowing each value to be overridden through env.
+  env: {
+    NEXT_PUBLIC_FACTORY_ADDRESS:
+      process.env.NEXT_PUBLIC_FACTORY_ADDRESS || "0x74e648c412EE36E543D208E7c2c9552a81AFe47c",
+    NEXT_PUBLIC_COMMENTS_ADDRESS:
+      process.env.NEXT_PUBLIC_COMMENTS_ADDRESS || "0x5c4D46F6b089fE6b4bd8E4f4B621D15B5EC87E99",
+    NEXT_PUBLIC_DEX_ROUTER:
+      process.env.NEXT_PUBLIC_DEX_ROUTER || "0x1926cA6dcD165Bcea9912Eae51F0279b3AD16541",
+    NEXT_PUBLIC_DEX_FACTORY:
+      process.env.NEXT_PUBLIC_DEX_FACTORY || "0xeAb6b1eDB3b5eF2254119235eA7f9b6B4426A924",
+    NEXT_PUBLIC_WLTC:
+      process.env.NEXT_PUBLIC_WLTC || "0xAe17Ee3EEA585a1FEE19b41A6d76F8DAcf87aC50",
+  },
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   images: {
     remotePatterns: [{ protocol: "https", hostname: "**" }],
